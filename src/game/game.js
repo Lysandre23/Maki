@@ -34,6 +34,8 @@ export const POWER = [
 const EMERGENCY_PER_ROOM = 2;
 const SMOKE_PER_ROOM = 3;
 const MG_OVERHEAT = 60;
+const RUSH_TICKS = 180;      // LOADER RUSH: reload x2 for 3 s after a kill
+const ABANDON_TICKS = 120;   // crew bails out, then the tank blows
 
 // Whole game state, DOM-free (also runs headless in tools/).
 // states: play -> cleared -> reward -> play ... | dead | win
@@ -96,6 +98,7 @@ export class Game {
     this.scrap.length = 0;
     this.smokeClouds.length = 0;
     this.barrels = layout.barrels;
+    this.layoutName = layout.layout;
     this.emergency = EMERGENCY_PER_ROOM + this.player.mods.extraEmergency;
     this.smokeCharges = SMOKE_PER_ROOM + this.player.mods.extraSmoke;
     this.smokeCd = 0;
@@ -105,7 +108,7 @@ export class Game {
     p.x = layout.spawn.x; p.y = layout.spawn.y;
     p.a = 0; p.ta = 0; p.vx = p.vy = p.av = 0;
     p.burning = 0; p.reload = 20; p.events.length = 0;
-    p.mgHeat = 0; p.overheat = false; p.frost = 0;
+    p.mgHeat = 0; p.overheat = false; p.frost = 0; this.rushT = 0;
 
     this.enemies = layout.enemies.map((e, i) => {
       const t = new Tank(e.type, e.x, e.y, e.a, 1);
@@ -388,6 +391,7 @@ export class Game {
       }
     }
     const res = t.takeHit(zone, dmg, dirx, diry, p.x, p.y);
+    if (res.pen) this.popup('PENETRATION!', p.x, p.y - 14, 13, t === this.player, !res.ricochet && t !== this.player);
     const push = p.dmg * 0.008 * (500 / t.mass) * (res.ricochet ? 0.3 : 1);
     t.vx += dirx * push; t.vy += diry * push;
     if (res.ricochet) {
@@ -446,6 +450,10 @@ export class Game {
     }
     this.popup(big ? 'KA-BOOM!' : 'BLAM!', t.x, t.y - t.hw - 8, big ? 22 : 18, false, true);
     this.shake = Math.min(14, this.shake + (big ? 10 : 6));
+    if (t.team && this.player.alive) { // LOADER RUSH: momentum after a kill
+      this.rushT = RUSH_TICKS;
+      this.popup('LOADER RUSH!', this.player.x, this.player.y - this.player.hw - 14, 11, true);
+    }
   }
 
   // The dead tank becomes part of the terrain: destructible metal cover.
@@ -552,6 +560,7 @@ export class Game {
       }
       t.events.length = 0;
     }
+    this.missionKills();
     for (const t of this.tanks) if (t.alive && t.parts.hull.hp <= 0) this.killTank(t);
 
     for (let i = this.flashes.length - 1; i >= 0; i--) if (++this.flashes[i].t >= 10) this.flashes.splice(i, 1);
@@ -637,11 +646,28 @@ export class Game {
       rb += Math.min(1, near / 150);
     }
     if (m.coldBlood && this.enemies.some((e) => e.alive && e.frost > 0.2)) rb *= 2;
+    if (this.rushT > 0) { this.rushT--; rb *= 2; }
     p.reloadBoost = rb;
     // LEAKY TANK
     if (m.leaky && p.alive && Math.hypot(p.vx, p.vy) > 0.3 && this.tick % 3 === 0) {
       const bx = p.x - Math.cos(p.a) * (p.hl + 2), by = p.y - Math.sin(p.a) * (p.hl + 2);
       this.oil.add(g, Math.floor(bx), Math.floor(by), Math.round(2 * m.oilAmount));
+    }
+  }
+
+  // Mission kill: an enemy with no gun and no way to move is abandoned by its
+  // crew and scuttled a couple of seconds later.
+  missionKills() {
+    for (const t of this.enemies) {
+      if (!t.alive) continue;
+      const pt = t.parts;
+      const stuck = pt.engine.hp <= 0 || (pt.trackL.hp <= 0 && pt.trackR.hp <= 0);
+      if (!t.abandonT && pt.cannon.hp <= 0 && stuck) {
+        t.abandonT = ABANDON_TICKS;
+        this.popup('ABANDONED!', t.x, t.y - t.hw - 12, 14, false, true);
+        this.gas.addSmoke(t.x, t.y, 1.5);
+      }
+      if (t.abandonT && --t.abandonT <= 0) t.parts.hull.hp = 0;
     }
   }
 

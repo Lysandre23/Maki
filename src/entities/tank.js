@@ -5,6 +5,12 @@ import { F } from '../world/worldgen.js';
 
 export const PARTS = ['hull', 'trackL', 'trackR', 'turret', 'cannon', 'engine', 'ammo'];
 
+// Armor tuning: the front is a wall, flanks and rear are where fights are won.
+const SIDE_MULT = 0.9;
+const REAR_MULT = 1.6;
+const PEN_MULT = 1.5;       // square hit on a flank / the rear
+const PART_TO_HULL = 0.6;   // share of a part hit that also hits the hull
+
 const hp = (hull, track, turret, cannon, engine, ammo) =>
   ({ hull, trackL: track, trackR: track, turret, cannon, engine, ammo });
 
@@ -13,23 +19,23 @@ const hp = (hull, track, turret, cannon, engine, ammo) =>
 export const TYPES = {
   player: {
     len: 40, wid: 26, speed: 1.5, turn: 0.05, turretRate: 0.09, reload: 36, armorFront: 0.5,
-    hp: hp(180, 60, 60, 50, 60, 50), shell: { speed: 8, dmg: 42, r: 12, power: 13 }, body: 0xec, top: 0xfc, range: 0,
+    hp: hp(180, 60, 60, 50, 60, 50), shell: { speed: 8, dmg: 55, r: 12, power: 13 }, body: 0xec, top: 0xfc, range: 0,
   },
   scout: {
     len: 32, wid: 20, speed: 1.6, turn: 0.065, turretRate: 0.08, reload: 60, armorFront: 0.8,
-    hp: hp(55, 25, 25, 20, 25, 20), shell: { speed: 6.5, dmg: 12, r: 8, power: 9 }, body: 0xb4, top: 0xc8, range: 140,
+    hp: hp(55, 25, 25, 20, 25, 20), shell: { speed: 6.5, dmg: 18, r: 8, power: 9 }, body: 0xb4, top: 0xc8, range: 140,
   },
   gunner: {
     len: 40, wid: 26, speed: 1.0, turn: 0.045, turretRate: 0.05, reload: 95, armorFront: 0.55,
-    hp: hp(110, 45, 45, 40, 45, 35), shell: { speed: 7, dmg: 22, r: 11, power: 12 }, body: 0x8c, top: 0xa4, range: 230,
+    hp: hp(110, 45, 45, 40, 45, 35), shell: { speed: 7, dmg: 33, r: 11, power: 12 }, body: 0x8c, top: 0xa4, range: 230,
   },
   heavy: {
     len: 48, wid: 32, speed: 0.65, turn: 0.03, turretRate: 0.035, reload: 125, armorFront: 0.2,
-    hp: hp(220, 80, 80, 70, 70, 60), shell: { speed: 6.5, dmg: 34, r: 15, power: 15 }, body: 0x64, top: 0x7c, range: 190,
+    hp: hp(220, 80, 80, 70, 70, 60), shell: { speed: 6.5, dmg: 48, r: 15, power: 15 }, body: 0x64, top: 0x7c, range: 190,
   },
   boss: {
     len: 64, wid: 42, speed: 0.5, turn: 0.022, turretRate: 0.04, reload: 70, armorFront: 0.2,
-    hp: hp(520, 140, 140, 120, 120, 100), shell: { speed: 7, dmg: 32, r: 18, power: 17 }, body: 0x4a, top: 0x60, range: 210,
+    hp: hp(520, 140, 140, 120, 120, 100), shell: { speed: 7, dmg: 45, r: 18, power: 17 }, body: 0x4a, top: 0x60, range: 210,
   },
 };
 
@@ -309,23 +315,26 @@ export class Tank {
     }
     const cos = Math.abs(dirx * nx + diry * ny); // 1 = square hit, 0 = grazing
     const isTrack = zone === 'trackL' || zone === 'trackR';
-    const faceMult = face === 'front' ? this.s.armorFront : face === 'rear' ? 1.25 : 0.9;
+    const faceMult = face === 'front' ? this.s.armorFront : face === 'rear' ? REAR_MULT : SIDE_MULT;
     const mult = isTrack ? Math.max(faceMult, 0.8) : faceMult;
     let eff = dmg * mult * (0.35 + 0.65 * cos) * (0.85 + rnd() * 0.3);
     // (the flanks are mostly track, so grazing track hits must deflect too)
     const ricochet = face !== 'rear' &&
       ((cos < 0.4 && rnd() < (isTrack ? 0.6 : 0.85)) || (!isTrack && mult < 0.35 && cos < 0.75 && rnd() < 0.5));
     if (ricochet) eff *= 0.15;
+    // PENETRATION: a square hit on a flank or the rear goes straight through
+    const pen = !ricochet && face !== 'front' && cos > 0.85;
+    if (pen) eff *= PEN_MULT;
 
     this.flashZone = zone; this.flashT = light ? 4 : 12;
     if (!light) this.hitT = 3;
     // weak point: a clean hit on an enemy's ammo rack cooks it off
     if (this.team && zone === 'ammo' && !ricochet && eff >= this.parts.ammo.max * 0.5) {
       this.damagePart('ammo', this.parts.ammo.hp + 1);
-      return { ricochet, eff, nx, ny, face };
+      return { ricochet, eff, nx, ny, face, pen };
     }
     this.damagePart(zone, eff);
-    if (zone !== 'hull') this.damagePart('hull', eff * 0.3);
-    return { ricochet, eff, nx, ny, face };
+    if (zone !== 'hull') this.damagePart('hull', eff * PART_TO_HULL); // hits on parts still wreck the hull
+    return { ricochet, eff, nx, ny, face, pen };
   }
 }

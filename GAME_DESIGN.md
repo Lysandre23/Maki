@@ -1,276 +1,171 @@
-# MAKI: Game Design Document (v0.1)
+# MAKI: Game Design Document (v0.2)
 
-Working title. Top-down, pixel-simulated, roguelike tank combat in the browser.
+A top-down, black-and-white comic-book tank roguelike where every pixel is simulated. You command a squad of tanks across large natural battlefields to capture the enemy flag. Pause on a tactical map to give orders, then fight on the front line in the most powerful tank of your army.
 
----
-
-## 1. Pitch
-
-A black-and-white, comic-book pixel-art tank roguelike. Every room is a ruined building made of individual simulated pixels: walls crumble, floors scorch, smoke and fire swirl. You drive a modular tank through 10 rooms, destroying enemy tanks by shooting their weak points, and pick an upgrade after each room.
-
-**Pillars**
-1. **Everything breaks.** Walls, cover, and the room itself are pixels you can carve through.
-2. **Aim at parts, not at health bars.** Enemy tanks have zones: shoot tracks to immobilize, the cannon to disarm, and the ammo rack to kill in one shot.
-3. **The air is alive.** Fire, smoke, and steam are simulated, affect gameplay (line of sight, damage), and look great.
-4. **Short, sharp runs.** 10 rooms, about 20-30 minutes.
+> v0.2 (2026-10-01): pivot from "one tank clears rooms" to "squad battles for a flag". The elemental system (oil, ice, elemental cards) is removed. Fire and smoke stay as natural physics.
 
 ---
 
-## 2. Art direction
-
-Reference: a black-and-white, comic-book top-down tank illustration (inspiration image, not included in the repo).
-
-- **Palette:** 1-bit core (black, white, 2-3 grays). **Red is the only accent color** (HUD, fire core, damage flashes, blood-like "hit" markers).
-- **Shading:** crosshatch and halftone dithering instead of gradients. Gas density is rendered with ordered (Bayer) dithering, which gives a comic-halftone look for free.
-- **Materials:** brick with mortar lines, octagon-tile floor, cracked stone, rubble.
-- **Comic VFX:** onomatopoeia sprites ("BLAM!", "KRAK!") with spiky burst outlines on big explosions, drawn as an overlay (not simulated).
-- **Persistent marks:** tank tracks, scorch marks, and craters are written into the floor layer and stay for the room.
-- **HUD:** red hand-drawn-style font, white-outline tank silhouettes showing part damage.
-- **Resolution:** internal 480×270 cells, upscaled 4× to 1920×1080 with nearest-neighbor filtering.
+## 1. Pillars
+1. **You are the spearhead.** Your tank is much stronger than any ally. Battles are won where you are.
+2. **Command, then fight.** Pause, read the battlefield on the tactical map, give orders, and jump back into the action.
+3. **Everything breaks and burns.** Walls crumble, fields and forests catch fire, smoke hides advances, wrecks become cover.
+4. **Every loss matters.** Allies who die are gone for the run. Cards can add new tanks to your team.
 
 ---
 
-## 3. Core gameplay
+## 2. Art direction and color rule
 
-### 3.1 Room loop
-1. Enter a room. Enemies are already placed.
-2. Kill all enemy tanks. The room is cleared and the exit opens.
-3. Choose 1 of 3 rewards.
-4. Next room. Room 10 is a boss room.
-5. Die and the run ends. Finish room 10 and you win the run.
+The world stays **black and white** (comic ink, halftone, cross-hatching, baked lighting). Color is **reserved for meaning**:
 
-### 3.2 Controls (simplified)
-| Input | Action |
+| Color | Meaning |
 |---|---|
-| W / S | Drive forward / backward |
-| A / D | Rotate hull |
-| Mouse | Aim turret (turret rotates separately and at limited speed) |
-| Left click | Fire main cannon |
-| Right click / Space | Secondary (machine gun at first, later ability slot) |
-| R | Quick repair (limited charges) |
+| **Yellow** | HUD, UI, cards, tactical map highlights (replaces the old red HUD) |
+| **Red** | Enemies only: tank outline stroke, enemy shells, enemy markers |
+| **Blue** | Allies: tank outline stroke, ally markers and orders |
+| **Orange** | Fire and flames (was red) |
 
-Under the hood, WASD is converted into **left/right track speeds** (differential drive). That way damaged tracks behave correctly (a dead left track makes you pull to that side) and "expert mode" with direct track control can be added later without changing the physics.
+- **Team strokes:** every tank gets a 1-cell colored outline (red enemy, blue ally). The player's tank uses a distinct, stronger blue outline plus a small yellow pennant, so it reads instantly in a crowd.
+- Comic onomatopoeia ("BLAM!", "KA-BOOM!") stay white/black with yellow bursts.
 
-### 3.2b In-room systems (implemented 2026-10-01)
-| Input | Action |
+---
+
+## 3. Run structure
+- A **run** is a campaign of **7 battles** (6 battles + a final assault). Each battle lasts about **5 minutes**.
+- After each won battle you **pick 1 of 3 cards** (see section 9).
+- Your **team roster persists** between battles: surviving allies keep their damage (partially repaired) and dead allies are lost for good.
+- **Defeat:** your own tank is destroyed. Allies alone can't carry the fight.
+- **Victory:** capture the flag of the final assault.
+
+---
+
+## 4. The battle
+- **Map:** large and horizontal, about 4 screens of area (target 2560x864 cells, camera 640x360). You spawn on the left edge, and the enemy flag is near the right edge.
+- **Objective: capture the flag.**
+  - A capture zone (radius ~60 cells) around the flag.
+  - Capture fills while friendly tanks are inside and no enemy is. It takes ~8 s with the player alone and is faster with allies (+30% each).
+  - It is contested (frozen) while enemies are in the zone, and decays slowly when nobody is there.
+- **Enemy side:**
+  - **Fixed defenses:** dug-in tanks, bunkers, and guns covering the approaches to the flag.
+  - **Reinforcement waves** from the right edge, about every 60 s, growing with the battle number.
+  - The **enemy commander AI** distributes its squads over the lanes of the map and reinforces the threatened ones.
+- **Pace:** slower than the room prototype, with longer engagement ranges, longer reloads and heavier tanks. Bigger distances make positioning and orders matter.
+
+---
+
+## 5. Player tank
+Keeps everything built so far:
+- **Parts:** hull, 2 tracks, turret, cannon, engine and ammo rack, each with its own HP.
+- **Armor:** by impact angle, with ricochets. Flanking pays: side ×0.9, rear ×1.6, PENETRATION ×1.5 for square hits.
+- **Crew:** 2 mechanics, keys 1-7, consuming spares from wrecks.
+- **Emergency patch (E), power modes (C), coaxial machine gun (RMB), smoke grenades (Space).**
+- **LOADER RUSH** after kills, and **mission kills** (a tank with no cannon and no mobility is abandoned).
+
+It is **much stronger than allies**: about 2-3× their hull, faster reload, better armor, and an exclusive card family.
+
+---
+
+## 6. Allies
+- **Organized in squads** of 1 to 3 tanks. At the start of a run: 2 squads (e.g. 2 gunners + 2 scouts).
+- **Same part model as enemies** (they lose tracks, get abandoned, burn), with simpler stats than the player.
+- **Types** (unlocked by cards): Scout, Gunner, Heavy, Anti-tank (long range, fragile), Support (repairs nearby allies slowly).
+- **Autonomous behaviour within their order:** use cover, focus the nearest threat, avoid friendly fire, fall back when badly damaged (if the stance allows).
+- **Losses are permanent.** A dead ally leaves a wreck (cover plus spares, as usual).
+
+---
+
+## 7. Tactical map (pause)
+- **Tab / M** opens it and pauses the game. Closing it resumes.
+- **Schematic rendering** of the whole battlefield: terrain simplified to flat tones (forest, water, walls, roads, burning areas), the flag and capture zone, the front line.
+- **Units shown as icons:**
+  - your tank (yellow);
+  - ally squads (blue, with health and current order);
+  - **known enemies only** (red): what any friendly unit currently sees, plus last-seen ghosts that fade.
+- **Orders, per squad:** click a squad, then click on the map.
+
+| Order | Behaviour |
 |---|---|
-| Right click (hold) | Coaxial machine gun: chips masonry, 1.8x damage to tracks, can light crates. Overheats. |
-| Space | Smoke grenades (3 per room): 3 canisters, cloud blocks enemy line of sight |
-| 1-7 / click a part | Send a mechanic to that part (2 mechanics, A and B). Same part twice = both on it, third press recalls |
-| E | Emergency patch (2 per room): a destroyed part (engine first) back to 35%, puts out engine fire |
-| C | Power mode: BALANCED / DRIVE (speed up, turret+reload down) / GUNNERY (reload+turret up, speed down) |
+| **Move** | Go to the point by the drawn path, engage what they meet |
+| **Attack** | Push into the zone, engage everything there |
+| **Hold** | Take cover around the point and defend it |
+| **Follow** | Escort the player's tank |
 
-- **Crew repair** consumes **spares** (hull costs twice as much), 2x faster when the tank stands still, wrecked parts repair at half speed.
-- **Spares** drop from enemy wrecks as physical pickups (magnetised when close), so salvaging means driving into danger.
-- **Armor by impact angle:** the struck face's normal is computed from the impact point; damage scales with how square the hit is; grazing hits **ricochet** (the shell is reflected and keeps flying, it can hit anyone, including its shooter).
-- **Shot telegraph:** enemies "charge" before firing (dashed red laser to the first wall + muzzle glint, turret nearly locked) so shots can be dodged.
-- **Target readout:** hovering an enemy shows its part status; the zone under the crosshair is named, weak spots flagged.
-- **Wall collapse:** masonry fragments cut off from their structure and small relative to it (< 45%, < 450 cells) topple across their long axis away from the shot, spill rubble and dust, and crush tanks where they land.
+- **Stance** toggle per squad: **Aggressive** (never retreat) / **Cautious** (fall back to repair below 40% hull).
+- Orders are drawn as blue arrows and stay visible faintly in-game (optional toggle).
+- **Quick orders without the map** (optional, later): a key to order all squads to "Follow me" / "Hold here".
 
-### 3.2c Elements and builds (implemented 2026-10-01)
-Color is information: the world stays black and white, and only elements are colored (fire red, ice pale blue, oil green).
+---
 
-- **Oil (green):** a liquid layer (depth per cell) that flows out, pools, slows tanks by 40%, and burns fast and hot. Explosions ignite it (50% per cell, 100% with NAPALM). Some rooms start with puddles.
-- **Ice (pale blue):** a frost coat on the floor and walls, with a timer.
-  - Frozen floor makes tanks lose grip (sideways slides, sluggish steering).
-  - Frozen masonry takes 2x blast damage (4x with BRITTLE) and shatters into shards.
-  - Frozen tanks are slowed up to 60% (drive, turret, reload).
-  - Ice snuffs fires, and heat melts ice into steam.
-- **Card system:** 42 cards in 4 rarities (common, rare, epic, legendary).
-  - Card types:
-    - **Sources:** give an element to the cannon, the machine gun, or the tank itself.
-    - **Amplifiers:** only offered once you own a matching source.
-    - **Build-around legendaries:** can appear at any time.
-  - Draws favour cards that share tags with your build (element tags x1.8 weight). The first draw always contains an element source.
-  - Cards show their element band, rarity frame, tags, a SYNERGY badge, and a YOUR BUILD strip.
-  - Example combo: PHOENIX HULL (L, less damage the more the room burns) + LONG BURN (C) + FIREPROOF HULL (R).
-- Cross-element payoffs: THERMAL SHOCK (fire on ice or ice on fire gives x3 damage and a cracked part), NAPALM (oil + fire), GRIP TREADS (oil + ice).
+## 8. Enemy
+- **Defenses:** entrenched tanks with sandbag or bunker cover near the flag and at chokepoints.
+- **Waves:** squads entering from the right, targeting the lane where the player's forces are weakest or where the flag is threatened.
+- **Commander AI:** evaluates each lane (friendly vs enemy strength) every few seconds and assigns squads Attack / Hold / Reinforce.
+- Enemy types: the current Scout, Gunner, Heavy, a Boss for the final assault, plus Anti-tank guns (static).
 
-### 3.3 Player tank
-The player tank is **not pixel-destructible**. It is a rigid body made of parts. Each part has its own HP and a hitbox inside the hull shape.
+---
 
-| Part | Function | When damaged | When destroyed |
-|---|---|---|---|
-| Hull | Overall HP | n/a | You die |
-| Left / Right track | Movement | Slower, pulls to one side | That track is dead. The tank pivots in circles, and with both dead you are immobile |
-| Turret | Aiming | Slower rotation | Turret locked in place |
-| Cannon | Firing | Longer reload, spread | Cannot fire the main gun |
-| Engine | Speed / power | Lower top speed, smoke trail | Stop, plus fire risk |
-| Ammo rack | Ammo storage | Fire risk | Explosion: big damage to the hull |
+## 9. Cards (two families)
+Rarities are kept: common, rare, epic, legendary. Picked 1 of 3 after each battle.
 
-Parts can be **repaired** with limited repair charges, between rooms, or by pickups.
+**Player tank** (examples)
+- Tungsten core (+damage), Autoloader (reload), Reinforced hull, Heavy tracks, Turbo engine, Front plating
+- Big bore (blast radius), High velocity, Ricochet rounds, Cluster shells
+- Speedy wrenches, Emergency kit, Smoke rack, Belt feed
 
-### 3.4 Enemy tanks
-Enemies use the same part model, but each **zone** has a rule:
-- **Weak-point zones** (ammo rack, rear engine): one-shot kill with enough damage. A big explosion follows.
-- **Functional zones** (tracks, turret, cannon): destroying one disables that function. A limping enemy stays dangerous but becomes easy to finish.
-- **Armored zones** (front of hull, turret front): heavy damage reduction. AP shells can still penetrate.
+**Team** (examples)
+- **New tank:** a new ally joins (Scout / Gunner / Heavy / Anti-tank / Support, by rarity)
+- Veteran crews (allies +accuracy, +reload), Field workshop (allies repaired fully between battles)
+- Extra squad slot, Bigger squads (max 4)
+- Combined arms (allies near you reload faster; you reload faster near allies)
+- Rally (Follow-me squads get armor), Spotters (allies reveal enemies further on the tactical map)
+- Quick capture (capture zone fills faster), Artillery support (legendary: a callable barrage on the tactical map)
 
-Hit location is determined by where the projectile intersects the tank, and the angle matters (front armor is thick, rear armor is thin).
+Synergy logic: cards share tags (e.g. `escort`, `assault`, `defense`, `recon`), and draws favour tags you already own, as before.
 
-**Enemy types (first set)**
-| Type | Behavior | Notes |
+---
+
+## 10. Biomes (natural scenes)
+Each battle picks a biome. Materials are simulated like the rest of the world.
+
+| Biome | Features | New materials |
 |---|---|---|
-| Scout | Fast, light armor, chases and circles | Dies to anything, hard to hit |
-| Gunner | Medium, keeps distance, strafes | The default enemy |
-| Heavy | Slow, front armor nearly immune | Flank for the rear engine |
-| Artillery | Stationary, lobs shells over walls with a marker telegraph | Forces movement |
-| Flamer | Short range, sets terrain on fire | Uses the fire simulation |
-| Boss (room 10) | Large tank, many separate destructible parts | Part-by-part fight |
+| **Field** | Open ground, hedgerows, hay bales, farm buildings, craters | **Grass** (flammable, burns in racing fronts), **Hay** |
+| **Forest** | Dense trees (cover, line of sight blockers), clearings, trails | **Tree trunk** (solid wood), **Canopy** (hides units from above, flammable, blocks vision) |
+| **Beach** | Sand, shallow water, dunes, concrete bunkers, beach obstacles | **Sand** (soft, cratered easily), **Water** (slows tanks, fire makes steam), **Concrete** |
+| **Village** | The current building layouts (halls, lanes, courtyard) broken into houses | existing brick and stone |
 
-### 3.5 Weapons and ammo
-| Shell | Effect |
-|---|---|
-| AP (default) | Penetrates N cells of wall, small blast, high tank damage |
-| HE | No penetration, big crater, splash damage, lots of debris and smoke |
-| Incendiary | Sets cells on fire and creates lasting flames |
-| Machine gun | Rapid low-damage bullets, chips at bricks and plates |
-
-Ammo is limited (see the HUD in the reference) and refilled by pickups between rooms.
-
-### 3.6 Rewards (post-room choices, pick 1 of 3)
-- **New part / part upgrade:** armor plating, reinforced tracks, bigger cannon, second machine gun.
-- **New shell type** or ammo capacity.
-- **Repair:** restore part HP or add repair charges.
-- **Passive perks:** e.g. faster reload, dust cloud hides you, fire-resistant hull, shells pierce one extra cell.
-- **Risky deals:** a strong bonus with a drawback.
-
-### 3.7 Progression of the 10 rooms
-| Rooms | Content |
-|---|---|
-| 1-3 | Scouts and gunners. Learn movement and destruction. |
-| 4-6 | Heavies and artillery. Flamers appear. Larger layouts. |
-| 7-9 | Mixed groups, more hazards (oil, explosive barrels). |
-| 10 | Boss. |
-
-Rooms come from a few **handcrafted layout templates** (walls, cover, floor type) with randomized enemy groups and props, instead of fully procedural generation.
+Fire stays **natural physics** and is rendered **orange**: explosions and burning grass or trees can set a whole flank ablaze, and smoke blocks vision.
 
 ---
 
-## 4. Simulation design (the technical core)
-
-Top-down means **no gravity**. The design reflects that.
-
-### 4.1 Grid and layers
-World size: **480×270 cells** (1 cell = 1 screen pixel before 4× upscale). Stored as typed arrays (struct-of-arrays):
-
-| Array | Type | Purpose |
-|---|---|---|
-| `material` | Uint8 | What is in each cell: empty, brick, stone, wood, metal, rubble, barrel, oil... |
-| `hp` / `data` | Uint8 | Per-cell durability or variant (brick shade, mortar) |
-| `floor` | Uint8 | Floor layer: tile pattern, scorch, craters, track marks (written by events, not simulated) |
-| `gas` (density) | Float32 (lower res, e.g. 240×135) | Smoke / steam density |
-| `gasVel` (x, y) | Float32 | Velocity field (blast pushes it, it swirls) |
-| `heat` | Float32 or Uint8 | Temperature per cell (drives fire, steam) |
-
-Colors are assigned at render time from the material and shading rules, which keeps the 1-bit look consistent.
-
-### 4.2 Destruction
-- **Static solids** (brick, stone, wood, metal) only change on damage events. They cost nothing per frame when idle.
-- A shell hit calls `explode(x, y, radius, power)`: cells inside the radius lose durability depending on material and distance, and destroyed cells become **debris**.
-- **Debris:** destroyed cells are converted into short-lived free particles with velocity (outward from the blast). When their speed falls to zero, they settle back into the grid as **rubble** cells (a weak, walkable-slow material). Rubble can be pushed and crushed by tanks.
-- **Unsupported chunks:** after a big explosion, a flood fill from the wall's anchor points finds disconnected pieces, which then collapse into debris. This is expensive, so it only runs on dirty regions, and it is a **later milestone**.
-- **Penetration:** AP projectiles raymarch through cells and subtract their energy from each cell's durability. They stop when energy runs out.
-
-### 4.3 Tanks versus the pixel world
-- Tanks are **rigid bodies** (position, angle, velocity, angular velocity), not grid cells.
-- **Collision:** sample a set of points along the hull outline against the `material` grid. Push out along the averaged normal and apply friction. Rubble cells only slow the tank.
-- **Crushing:** low-durability props and rubble can be driven through.
-- **Track marks:** each frame, stamp the track positions into the `floor` layer.
-
-### 4.4 Gas, smoke, steam, and fire
-- **Gas field** (smoke, steam, dust) on a half-resolution grid, using a stable-fluids style solver: advect, diffuse, dissipate.
-  - Explosions inject **velocity** (a radial push) and **density**, so blasts push smoke outward and it then curls around walls.
-  - Destroyed walls open new paths for the gas to flow through.
-  - Gas rendering uses Bayer dithering on density, producing halftone-looking clouds.
-  - **Gameplay effect:** dense smoke blocks enemy line of sight (and yours, partly).
-- **Fire** is cell-based:
-  - Each burning cell has a `life` counter and emits heat plus smoke into the gas field.
-  - It spreads to flammable neighbors (wood, oil, cloth props, explosive barrels) based on heat and a random chance.
-  - Flames flicker with noise-driven dithering, with a red core.
-  - Fire damages tanks' parts that stand in it (engine first).
-- **Steam:** water or oil reacting with heat produces steam, which is gas with fast dissipation. Used for bursting pipes, hazards, and destroyed-engine effects.
-- Burned surfaces are written into the `floor` layer as scorch, so the room keeps a record of the fight.
-
-### 4.5 Simulation update order (per frame, fixed 60 Hz)
-1. Input, AI decisions
-2. Tank physics (track forces, collision)
-3. Projectiles (raymarch, hit tests)
-4. Explosions and damage events (grid changes, debris spawn)
-5. Debris particle update (settle into rubble)
-6. Fire update (active cells only)
-7. Gas solver (half-res)
-8. Render: floor, solids, debris, gas (dithered), tanks (sprites), HUD, comic overlays
-
-### 4.6 Performance plan
-- **Targets:** 60 fps on a mid-range laptop, 480×270 world.
-- **Dirty rectangles and active lists:** only simulate where something is changing (debris, fire cells, gas above a density threshold).
-- **Typed arrays only:** no per-cell objects.
-- **Rendering:** write directly to an `ImageData` buffer of 480×270 and scale up on the canvas with `imageSmoothingEnabled = false`.
-- **Budgets:** debris particles are capped (e.g. 4000), and the oldest settle early when the cap is reached.
-- **Escape hatches if we are too slow:** Web Worker for the gas solver, lower gas resolution, or WebAssembly later.
-- **Measurement first:** milestone 0 is a stress test that reports frame times.
+## 11. Physics kept and removed
+- **Kept:** pixel destruction, debris and rubble, wall collapse and crushing, fire (orange), smoke/steam fluid, wrecks as terrain, track marks, scorch.
+- **Removed:** oil, ice/frost, all elemental cards (fire, ice and oil families), elemental HUD colors.
 
 ---
 
-## 5. Enemy AI
-- **Senses:** line of sight is a raymarch through the grid (blocked by solids and by dense smoke). Enemies also hear shots.
-- **Behaviors (state machine):** patrol, chase, strafe/hold, flank, retreat when damaged.
-- **Part-aware:**
-  - No tracks means it becomes a turret that rotates in place.
-  - No cannon means it tries to ram you, or flees.
-  - Destroyed turret means it cannot aim and only drives.
-- **Terrain awareness:** a coarse navigation grid (for example 8×8 cells per node) is rebuilt when the terrain changes a lot. Enemies can also decide to shoot through a wall that blocks them.
+## 12. Tech notes
+- **World:** grid ~2560x864 (2.2 M cells, ~20 MB of typed arrays), 64x64 chunks, camera 640x360.
+- **Gas solver:** limited to a window around the camera (e.g. 1.5 screens), frozen or dissipated outside it, so its cost stays at today's ~3 ms.
+- **AI:** team-agnostic tank brain (target selection by team), with an **order layer** (move/attack/hold/follow + stance) on top and a **commander layer** for the enemy. Line-of-sight checks are staggered over ticks.
+- **Navigation:** flow fields per order destination, cached and shared by squads with the same target.
+- **Fog of war:** a per-team visibility grid at coarse resolution (e.g. 16-cell nodes), updated a few times per second.
 
 ---
 
-## 6. UI / HUD
-- Top left: score. Bottom left: ammo and a tank silhouette showing part health.
-- Part colors are white (fine), hatched (damaged), red outline (destroyed).
-- Reward screen is 3 cards in the same comic style.
-- Between rooms: a short "ROOM CLEARED!" comic burst.
-
----
-
-## 7. Tech stack
-- **Browser**, HTML5 Canvas 2D, plain JavaScript (ES modules), no build step.
-- Needs a small local server to run (e.g. `python -m http.server` or `npx serve`) because of ES modules.
-- **Proposed structure**
-```
-maki/
-  index.html
-  src/
-    main.js          game loop, init
-    config.js        constants (grid size, budgets)
-    world/           grid.js, materials.js, explosion.js, debris.js, fire.js, gas.js
-    entities/        tank.js, parts.js, projectile.js, ai.js
-    render/          renderer.js, dither.js, sprites.js, hud.js
-    game/            rooms.js, rewards.js, run.js
-    util/            input.js, rng.js, perf.js
-```
-- Sprites drawn procedurally at first (simple shapes), and we replace them with real pixel art later.
-
----
-
-## 8. Milestones
-
+## 13. Milestones
 | # | Goal | Done when |
 |---|---|---|
-| **M0** | **Performance prototype:** chunked grid (e.g. 64×64 cells per chunk) with a scrolling camera, only active/visible chunks simulated and rendered, brick wall, click to explode, debris that settles, FPS counter. The test map should be larger than one screen. | Many explosions stay at 60 fps, and cost depends on activity near the camera, not on map size |
-| M1 | Drivable tank, collision with the pixel world, turret, AP shell that breaks walls, track marks | You can drive and shoot your way through a wall |
-| M2 | Gas solver, fire, smoke, dithered rendering | Explosions push smoke, fires spread and burn out |
-| M3 | Part system for tanks and hit zones, damage, HUD silhouette | Shooting tracks and cannon visibly changes behavior |
-| M4 | One enemy type with AI, line of sight, part-aware behavior | A fair 1v1 fight is possible |
-| M5 | Room loop: layouts, spawn, clear condition, reward screen (3 placeholder rewards) | A 3-room run can be played |
-| M6 | Content: all enemy types, shell types, reward pool, 10 rooms, boss | A full run is possible |
-| M7 | Polish: real pixel art, comic overlays, sound, screen shake, balance | Feels like the reference |
+| **B1** | Remove the elements. New color rule (yellow HUD, orange fire, red/blue strokes). Wide map + **Field** biome (grass, hedges, hay). Team-agnostic AI with **allies**. **Flag capture**. | A battle can be won by capturing the flag with 4 allies at your side |
+| B2 | **Tactical map**: pause, schematic view, squads, orders (Move/Attack/Hold/Follow), stances, fog of war | Orders visibly change how the battle unfolds |
+| B3 | **Enemy**: defenses, reinforcement waves, commander AI; 5-minute pacing and balance | Battles last ~5 min and feel like a front line |
+| B4 | **Cards v2** (player / team families, new-tank cards), roster persistence, 7-battle run | A full run is playable |
+| B5 | **Biomes**: Forest, Beach, Village | Each battle picks a biome |
+| B6 | Polish: sound, readability, balance | |
 
 ---
 
-## 9. Open questions / decisions for later
-- Sound design approach (procedural WebAudio vs recorded).
-- Meta-progression between runs (unlocks, starting loadouts).
-- Gamepad support.
-- Expert mode with independent track control.
-- Whether rubble should be persistent between rooms (currently: no).
-- Art pipeline for real sprites (Aseprite or hand-drawn in code).
+## 14. Open questions
+- Exact squad size cap, and whether the player can merge or split squads.
+- Should allies gain experience (veterancy) by surviving battles?
+- Night battles (the lighting system already supports dark maps)?

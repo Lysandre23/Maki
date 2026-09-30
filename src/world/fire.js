@@ -48,7 +48,7 @@ export class Fire {
       if (rnd() < 0.5) gas.addSmoke(x, y, oil ? 0.09 : 0.06);
       if (rnd() < 0.02) gas.addExpand(x, y, 0.05);
 
-      const reach = oil ? 1 : 2;
+      const reach = 2; // radiant heat jumps small gaps (droplet islands, cracks)
       if (rnd() < (oil ? 0.35 : 0.08) * this.spreadMult) {
         const nx = x + ((rnd() * (2 * reach + 1)) | 0) - reach, ny = y + ((rnd() * (2 * reach + 1)) | 0) - reach;
         if (grid.inBounds(nx, ny)) {

@@ -1,6 +1,7 @@
 import { ROOMS } from '../config.js';
 import { hash } from '../util/rng.js';
 import { M } from './materials.js';
+import { Nav } from './nav.js';
 
 // Floor ids (colored by render/palette.js)
 export const F = { TILE_A: 0, TILE_B: 1, LINE: 2, DOT: 3, CRACK: 4, TRACK: 5 };
@@ -77,42 +78,6 @@ function paintFloor(g, seed) {
   }
 }
 
-function wallLine(g, x, y, s, thick, horiz, avoid) {
-  if (horiz) fillRect(g, x + s, y, 1, thick, brickCell, avoid);
-  else fillRect(g, x, y + s, thick, 1, brickCell, avoid);
-}
-
-// Straight brick wall, with an optional doorway if long.
-function segment(g, x, y, len, thick, horiz, rng, avoid) {
-  SID++;
-  let gapA = -1, gapB = -1;
-  if (len > 130 && rng() < 0.7) { gapA = 20 + Math.floor(rng() * (len - 90)); gapB = gapA + 56; }
-  for (let s = 0; s < len; s++) {
-    if (s >= gapA && s < gapB) continue;
-    wallLine(g, x, y, s, thick, horiz, avoid);
-  }
-}
-
-// Long partition wall across the room with 2-3 wide doorways
-// (wide enough for heavy tanks).
-function partition(g, pos, a, b, thick, horiz, rng, avoid) {
-  SID++;
-  const doors = [];
-  const n = 2 + (rng() < 0.5 ? 1 : 0);
-  for (let k = 0; k < n * 6 && doors.length < n; k++) {
-    const w = 58 + Math.floor(rng() * 24);
-    const d = a + 30 + Math.floor(rng() * (b - a - 60 - w));
-    if (doors.some(([s, e]) => d < e + 40 && d + w > s - 40)) continue;
-    doors.push([d, d + w]);
-  }
-  for (let s = a; s < b; s++) {
-    if (doors.some(([d0, d1]) => s >= d0 && s < d1)) continue;
-    if (horiz) wallLine(g, s, pos, 0, thick, true, avoid);
-    else wallLine(g, pos, s, 0, thick, false, avoid);
-  }
-}
-
-// Baked "ceiling light" pools: bright floor under lights, black elsewhere.
 function bakeLights(g, lights) {
   const acc = new Float32Array(g.w * g.h).fill(0.06);
   for (const L of lights) {
@@ -162,7 +127,166 @@ function roster(level, rng) {
   return out;
 }
 
+// ------------------------------------------------------------------ layout
+
+const T = 14; // structural wall thickness
+
+// Straight wall from a to b (along x if horiz, else y) at `pos`, with
+// `nDoors` doorways. Doorways (plus an approach margin) are recorded in
+// `doors` so props and cover never block them.
+function wallWithDoors(g, pos, a, b, horiz, nDoors, rng, ctx) {
+  SID++;
+  const gaps = [];
+  const len = b - a;
+  for (let k = 0; k < nDoors * 8 && gaps.length < nDoors; k++) {
+    const w = 62 + Math.floor(rng() * 20);
+    if (len < w + 50) break;
+    const d = a + 22 + Math.floor(rng() * (len - 44 - w));
+    if (gaps.some(([s, e]) => d < e + 36 && d + w > s - 36)) continue;
+    gaps.push([d, d + w]);
+  }
+  for (let s = a; s < b; s++) {
+    if (gaps.some(([d0, d1]) => s >= d0 && s < d1)) continue;
+    if (horiz) fillRect(g, s, pos, 1, T, brickCell, ctx.avoid);
+    else fillRect(g, pos, s, T, 1, brickCell, ctx.avoid);
+  }
+  for (const [d0, d1] of gaps) {
+    ctx.doors.push(horiz
+      ? { x0: d0, y0: pos - 30, x1: d1, y1: pos + T + 30 }
+      : { x0: pos - 30, y0: d0, x1: pos + T + 30, y1: d1 });
+  }
+}
+
+// Ruined office block: a 3x2 grid of rooms. Every wall segment between two
+// junctions gets a doorway, so all rooms connect and there are loops to flank.
+function layoutHalls(g, rng, ctx) {
+  const W = g.w, H = g.h, B = BORDER;
+  const vx = [Math.round(W / 3 + (rng() - 0.5) * 70), Math.round((2 * W) / 3 + (rng() - 0.5) * 70)];
+  const hy = Math.round(H / 2 + (rng() - 0.5) * 80);
+  const doors = () => (rng() < 0.25 ? 2 : 1);
+  let opened = 0;
+  const seg = (pos, a, b, horiz) => {
+    if (opened < 1 && rng() < 0.15) { opened++; return; } // one wall knocked out: open plan
+    wallWithDoors(g, pos, a, b, horiz, doors(), rng, ctx);
+  };
+  for (const x of vx) { seg(x, B, hy, false); seg(x, hy + T, H - B, false); }
+  seg(hy, B, vx[0], true); seg(hy, vx[0] + T, vx[1], true); seg(hy, vx[1] + T, W - B, true);
+  const xs = [B, vx[0] + T, vx[1] + T, W - B], ys = [B, hy + T, H - B];
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 2; j++) ctx.rooms.push({ x: (xs[i] + xs[i + 1] - T) / 2, y: (ys[j] + ys[j + 1] - T) / 2 });
+}
+
+// Three long lanes split by two broken walls: fight down a lane, or slip
+// through a gap to flank.
+function layoutLanes(g, rng, ctx) {
+  const W = g.w, H = g.h;
+  const y1 = Math.round(H / 3 + (rng() - 0.5) * 40), y2 = Math.round((2 * H) / 3 + (rng() - 0.5) * 40);
+  for (const y of [y1, y2]) wallWithDoors(g, y, 170, W - 110, true, 2 + (rng() < 0.5 ? 1 : 0), rng, ctx);
+  for (const y of [(BORDER + y1) / 2, (y1 + y2 + T) / 2, (y2 + T + H - BORDER) / 2]) {
+    ctx.rooms.push({ x: W * 0.35, y }, { x: W * 0.75, y });
+  }
+}
+
+// A walled courtyard in the middle with one gate per side; the outer ring is
+// a corridor around it.
+function layoutCourtyard(g, rng, ctx) {
+  const W = g.w, H = g.h;
+  const x0 = 270 + Math.floor((rng() - 0.5) * 40), x1 = W - 200 + Math.floor((rng() - 0.5) * 40);
+  const y0 = 120 + Math.floor((rng() - 0.5) * 30), y1 = H - 120 + Math.floor((rng() - 0.5) * 30);
+  wallWithDoors(g, y0, x0, x1 + T, true, 1 + (rng() < 0.4 ? 1 : 0), rng, ctx);
+  wallWithDoors(g, y1, x0, x1 + T, true, 1 + (rng() < 0.4 ? 1 : 0), rng, ctx);
+  wallWithDoors(g, x0, y0 + T, y1, false, 1, rng, ctx);
+  wallWithDoors(g, x1, y0 + T, y1, false, 1, rng, ctx);
+  ctx.rooms.push({ x: (x0 + x1) / 2, y: (y0 + y1) / 2 }, { x: (x0 + x1) / 2, y: y0 / 2 },
+    { x: (x0 + x1) / 2, y: (y1 + H) / 2 }, { x: (x1 + W) / 2, y: H / 2 });
+}
+
+// Boss arena: one big hall ringed with heavy stone pillars.
+function layoutArena(g, rng, ctx) {
+  const W = g.w, H = g.h, cx = W * 0.58, cy = H / 2;
+  for (let k = 0; k < 10; k++) {
+    const a = (k / 10) * Math.PI * 2 + 0.3;
+    const x = Math.round(cx + Math.cos(a) * 230 - 12), y = Math.round(cy + Math.sin(a) * 170 - 12);
+    if (!areaFree(g, x, y, 24, 24, 8)) continue;
+    SID++;
+    fillRect(g, x, y, 24, 24, stoneCell, ctx.avoid);
+  }
+  ctx.rooms.push({ x: cx, y: cy });
+}
+
+// Short cover walls on open ground, facing the player's side of the room
+// (mostly vertical, since the player comes from the left). Kept 30 cells
+// clear of other solids so tanks can always drive around them.
+function placeCover(g, rng, ctx, n) {
+  const W = g.w, H = g.h;
+  let placed = 0;
+  for (let k = 0; k < n * 30 && placed < n; k++) {
+    const x = 170 + Math.floor(rng() * (W - 250)), y = 40 + Math.floor(rng() * (H - 100));
+    const r = rng();
+    const len = 34 + Math.floor(rng() * 26), thick = 10;
+    let w, h;
+    if (r < 0.7) { w = thick; h = len; } else { w = len; h = thick; }
+    if (!areaFree(g, x, y, w, h, 30) || ctx.blocked(x, y, w, h)) continue;
+    SID++;
+    fillRect(g, x, y, w, h, brickCell, ctx.avoid);
+    if (r > 0.85) fillRect(g, x, y + h - thick, len, thick, brickCell, ctx.avoid); // L
+    placed++;
+  }
+}
+
+// Straight-line check through the grid (every 2 cells).
+function clearLine(g, x0, y0, x1, y1) {
+  const n = Math.ceil(Math.hypot(x1 - x0, y1 - y0) / 2);
+  for (let k = 1; k < n; k++) {
+    if (g.isSolid(Math.floor(x0 + ((x1 - x0) * k) / n), Math.floor(y0 + ((y1 - y0) * k) / n))) return false;
+  }
+  return true;
+}
+
+// Enemies take defensive spots: reachable, with cover between them and the
+// player's entry, hidden from it, spread out. Scouts like the flanks, heavies
+// hold the middle.
+function placeEnemies(g, rng, spawn, types) {
+  const W = g.w, H = g.h;
+  const nav = new Nav(g, 12);
+  nav.rebuild(g);
+  nav.flow(spawn.x, spawn.y);
+  const cands = [];
+  for (let y = 50; y < H - 50; y += 16) {
+    for (let x = Math.round(W * 0.4); x < W - 40; x += 16) {
+      if (!areaFree(g, x - 24, y - 24, 48, 48)) continue;
+      const node = Math.floor(y / nav.c) * nav.w + Math.floor(x / nav.c);
+      if (nav.dist[node] < 0) continue; // unreachable pocket
+      const dx = spawn.x - x, dy = spawn.y - y, d = Math.hypot(dx, dy);
+      let cover = 0;
+      for (let s = 16; s <= 70; s += 3) {
+        if (g.isSolid(Math.floor(x + (dx / d) * s), Math.floor(y + (dy / d) * s))) { cover = s < 30 ? 1.5 : 2.5; break; }
+      }
+      const hidden = !clearLine(g, spawn.x, spawn.y, x, y);
+      cands.push({ x, y, base: cover + (hidden ? 2 : 0) + x / W });
+    }
+  }
+  const out = [];
+  for (const type of types) {
+    const s = SIZE[type];
+    let best = null, bs = -Infinity;
+    for (let relax = 0; relax < 2 && !best; relax++) {
+      const minD = relax ? 60 : 95;
+      for (const c of cands) {
+        if (!areaFree(g, Math.floor(c.x - s), Math.floor(c.y - s), 2 * s, 2 * s)) continue;
+        if (out.some((e) => (e.x - c.x) ** 2 + (e.y - c.y) ** 2 < minD * minD)) continue;
+        const edge = Math.abs(c.y - H / 2) / (H / 2); // 0 middle, 1 edge
+        const role = type === 'scout' ? edge * 1.5 : type === 'heavy' || type === 'boss' ? (1 - edge) * 1.5 : 0;
+        const sc = c.base + role + rng() * 1.2;
+        if (sc > bs) { bs = sc; best = c; }
+      }
+    }
+    if (best) out.push({ type, x: best.x, y: best.y, a: Math.atan2(spawn.y - best.y, spawn.x - best.x) });
+  }
+  return out;
+}
+
 const SIZE = { scout: 22, gunner: 26, heavy: 30, boss: 40 };
+const LAYOUTS = [layoutHalls, layoutLanes, layoutCourtyard];
 
 // Builds a room into the grid. Returns spawn points and props.
 export function generateRoom(g, rng, level) {
@@ -178,55 +302,49 @@ export function generateRoom(g, rng, level) {
   fillRect(g, W - BORDER, 0, BORDER, H, brickCell);
 
   const spawn = { x: 80, y: Math.round(H / 2) };
-  const avoid = (x, y) => (x - spawn.x) ** 2 + (y - spawn.y) ** 2 < 95 * 95;
+  const ctx = {
+    doors: [],
+    rooms: [],
+    avoid: (x, y) => (x - spawn.x) ** 2 + (y - spawn.y) ** 2 < 95 * 95,
+  };
+  // true if the rect overlaps a doorway approach or the spawn
+  ctx.blocked = (x, y, w, h) => ctx.avoid(x + w / 2, y + h / 2) ||
+    ctx.doors.some((d) => x < d.x1 && x + w > d.x0 && y < d.y1 && y + h > d.y0);
 
-  // Building layout: partition walls with doorways split the room into
-  // sub-rooms (like the reference art), then extra wall stubs inside.
-  const T = 14;
-  const vx = [Math.round(W / 3 + (rng() - 0.5) * 80), Math.round((2 * W) / 3 + (rng() - 0.5) * 80)];
-  const hy = Math.round(H / 2 + (rng() - 0.5) * 90);
-  for (const x of vx) partition(g, x, BORDER, H - BORDER, T, false, rng, avoid);
-  partition(g, hy, BORDER, W - BORDER, T, true, rng, avoid);
-
-  const nStubs = 3 + Math.floor(rng() * 3);
-  for (let k = 0; k < nStubs; k++) {
-    const thick = rng() < 0.5 ? 10 : 14;
-    const horiz = rng() < 0.5;
-    const len = 50 + Math.floor(rng() * 90);
-    const x = 140 + Math.floor(rng() * (W - 260));
-    const y = 40 + Math.floor(rng() * (H - 100));
-    segment(g, x, y, len, thick, horiz, rng, avoid);
-    if (rng() < 0.5) {
-      const len2 = 40 + Math.floor(rng() * 60);
-      if (horiz) segment(g, x + len - thick, rng() < 0.5 ? y : y - len2 + thick, len2, thick, false, rng, avoid);
-      else segment(g, rng() < 0.5 ? x : x - len2 + thick, y + len - thick, len2, thick, true, rng, avoid);
-    }
-  }
+  const layout = level >= ROOMS ? layoutArena : LAYOUTS[Math.floor(rng() * LAYOUTS.length)];
+  layout(g, rng, ctx);
+  placeCover(g, rng, ctx, 4 + Math.floor(rng() * 3));
 
   // Stone pillars
-  const nPillars = 2 + Math.floor(rng() * 4);
-  for (let k = 0; k < nPillars; k++) {
+  const nPillars = 2 + Math.floor(rng() * 3);
+  for (let k = 0, made = 0; k < nPillars * 10 && made < nPillars; k++) {
     const s = 12 + 6 * Math.floor(rng() * 3);
     const x = 120 + Math.floor(rng() * (W - 180)), y = 30 + Math.floor(rng() * (H - 90));
-    if (areaFree(g, x, y, s, s, 10) && !avoid(x, y)) { SID++; fillRect(g, x, y, s, s, stoneCell); }
+    if (!areaFree(g, x, y, s, s, 26) || ctx.blocked(x, y, s, s)) continue;
+    SID++;
+    fillRect(g, x, y, s, s, stoneCell);
+    made++;
   }
 
-  // Wooden crate clusters
+  // Wooden crates, stacked against walls (never in doorways)
   const crates = [];
   const nClusters = 3 + Math.floor(rng() * 3);
-  for (let k = 0; k < nClusters; k++) {
-    const cx = 110 + Math.floor(rng() * (W - 180)), cy = 30 + Math.floor(rng() * (H - 80));
+  for (let k = 0, made = 0; k < nClusters * 40 && made < nClusters; k++) {
+    const cx = 60 + Math.floor(rng() * (W - 120)), cy = 30 + Math.floor(rng() * (H - 60));
+    const nearWall = [[-12, 0], [22, 0], [0, -12], [0, 22]].some(([ox, oy]) => g.isSolid(cx + ox, cy + oy));
+    if (!nearWall || !areaFree(g, cx, cy, 21, 21, 1) || ctx.blocked(cx - 6, cy - 6, 33, 33)) continue;
     const count = 1 + Math.floor(rng() * 4);
     for (let c = 0; c < count; c++) {
       const x = cx + (c & 1) * 11, y = cy + (c >> 1) * 11;
-      if (areaFree(g, x, y, 10, 10, 3) && !avoid(x, y)) { crate(g, x, y); crates.push({ x, y }); }
+      if (areaFree(g, x, y, 10, 10, 1)) { crate(g, x, y); crates.push({ x, y }); }
     }
+    made++;
   }
 
   // Explosive barrels, often next to crates (chain reactions)
   const barrels = [];
   const nBarrels = 2 + Math.floor(rng() * 3) + (level > 3 ? 1 : 0);
-  for (let k = 0; k < nBarrels * 4 && barrels.length < nBarrels; k++) {
+  for (let k = 0; k < nBarrels * 6 && barrels.length < nBarrels; k++) {
     let x, y;
     if (crates.length && rng() < 0.6) {
       const c = crates[Math.floor(rng() * crates.length)];
@@ -234,7 +352,7 @@ export function generateRoom(g, rng, level) {
     } else {
       x = 110 + Math.floor(rng() * (W - 170)); y = 30 + Math.floor(rng() * (H - 60));
     }
-    if (!areaFree(g, x - 5, y - 5, 10, 10, 2) || avoid(x, y)) continue;
+    if (!areaFree(g, x - 5, y - 5, 10, 10, 2) || ctx.blocked(x - 5, y - 5, 10, 10)) continue;
     const id = barrels.length + 1;
     for (let yy = -5; yy <= 5; yy++) {
       for (let xx = -5; xx <= 5; xx++) {
@@ -244,33 +362,24 @@ export function generateRoom(g, rng, level) {
     barrels.push({ x, y, done: false });
   }
 
-  // Enemy spawns on the far side
-  const enemies = [];
-  for (const type of roster(level, rng)) {
-    const s = SIZE[type];
-    for (let tries = 0; tries < 400; tries++) {
-      const minX = tries < 300 ? W * 0.42 : W * 0.25;
-      const x = minX + rng() * (W - minX - 50), y = 45 + rng() * (H - 90);
-      if (!areaFree(g, Math.floor(x - s), Math.floor(y - s), 2 * s, 2 * s)) continue;
-      if (enemies.some((e) => (e.x - x) ** 2 + (e.y - y) ** 2 < 70 * 70)) continue;
-      enemies.push({ type, x, y, a: Math.PI + (rng() - 0.5) });
-      break;
-    }
-  }
+  const enemies = placeEnemies(g, rng, spawn, roster(level, rng));
 
-  // Ruin dressing: rubble piles, mostly against walls
-  for (let k = 0; k < 10; k++) {
+  // Ruin dressing: rubble piles at the foot of walls
+  for (let k = 0, made = 0; k < 200 && made < 10; k++) {
     const x = 20 + Math.floor(rng() * (W - 40)), y = 20 + Math.floor(rng() * (H - 40));
-    if (!avoid(x, y)) rubblePile(g, x, y, 5 + Math.floor(rng() * 8), rng);
+    if (g.isSolid(x, y) || ctx.avoid(x, y)) continue;
+    if (![[-8, 0], [8, 0], [0, -8], [0, 8]].some(([ox, oy]) => g.isSolid(x + ox, y + oy))) continue;
+    rubblePile(g, x, y, 5 + Math.floor(rng() * 7), rng);
+    made++;
   }
 
-  // Lights: one over the player, a few over the rooms (enemies often lit)
+  // Lights: over the entry, over most rooms (some left dark), and over a few
+  // enemy positions so they stand out
   const lights = [{ x: spawn.x + 40, y: spawn.y, r: 190 }];
-  const nLights = 4 + Math.floor(rng() * 3);
-  for (let k = 0; k < nLights; k++) {
-    const e = enemies[k];
-    if (e && rng() < 0.6) lights.push({ x: e.x + (rng() - 0.5) * 80, y: e.y + (rng() - 0.5) * 80, r: 140 + rng() * 90 });
-    else lights.push({ x: 60 + rng() * (W - 120), y: 40 + rng() * (H - 80), r: 140 + rng() * 110 });
+  for (const r of ctx.rooms) if (rng() < 0.7) lights.push({ x: r.x + (rng() - 0.5) * 40, y: r.y + (rng() - 0.5) * 40, r: 130 + rng() * 80 });
+  for (const e of enemies) {
+    if (e.type === 'boss') lights.push({ x: e.x, y: e.y, r: 170 }); // the boss gets a spotlight
+    else if (rng() < 0.35) lights.push({ x: e.x, y: e.y, r: 90 + rng() * 50 });
   }
   bakeLights(g, lights);
 
@@ -279,17 +388,17 @@ export function generateRoom(g, rng, level) {
     if (g.mat[i] === M.BRICK || g.mat[i] === M.STONE) g.structSize[g.struct[i]]++;
   }
 
-  g.dirty.fill(1);
-  g.touched.length = 0;
-  g.version++;
   // Oil puddles from leaking drums: elemental terrain even without upgrades
   const puddles = [];
   const nPuddles = rng() < 0.7 ? 1 + Math.floor(rng() * 3) : 0;
   for (let k = 0; k < nPuddles * 5 && puddles.length < nPuddles; k++) {
     const x = 120 + Math.floor(rng() * (W - 200)), y = 40 + Math.floor(rng() * (H - 80));
     const r = 10 + Math.floor(rng() * 12);
-    if (areaFree(g, x - r, y - r, 2 * r, 2 * r) && !avoid(x, y)) puddles.push({ x, y, r });
+    if (areaFree(g, x - r, y - r, 2 * r, 2 * r) && !ctx.avoid(x, y)) puddles.push({ x, y, r });
   }
 
-  return { spawn, enemies, barrels, puddles };
+  g.dirty.fill(1);
+  g.touched.length = 0;
+  g.version++;
+  return { spawn, enemies, barrels, puddles, layout: layout.name.replace('layout', '').toLowerCase() };
 }

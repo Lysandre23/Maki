@@ -1,4 +1,4 @@
-import { CHUNK, CHUNK_SHIFT } from '../config.js';
+import { CHUNK, CHUNK_SHIFT, WALL_FACE, SHADOW_LEN } from '../config.js';
 import { MAT_HP, SOLID } from './materials.js';
 
 const MAX_TOUCHED = 20000;
@@ -27,17 +27,20 @@ export class Grid {
     this.version = 0;                 // bumps whenever solidity changes (nav, gas)
   }
 
-  // Shadows are cast down-right from solids (see render/palette.js), so a change
-  // near a chunk's right/bottom edge also invalidates the neighbouring chunks.
+  // A solidity change also re-colors cells around it (see render/palette.js):
+  // shadows are cast down-right, and a wall's front face depends on the floor
+  // below it. Near a chunk edge, the neighbouring chunks are invalidated too.
   markDirty(x, y) {
     const cx = x >> CHUNK_SHIFT, cy = y >> CHUNK_SHIFT;
     const i = cy * this.cw + cx;
     this.dirty[i] = 1;
-    const right = (x & (CHUNK - 1)) >= CHUNK - 5 && cx + 1 < this.cw;
-    const down = (y & (CHUNK - 1)) >= CHUNK - 5 && cy + 1 < this.ch;
+    const right = (x & (CHUNK - 1)) >= CHUNK - SHADOW_LEN && cx + 1 < this.cw;
+    const down = (y & (CHUNK - 1)) >= CHUNK - SHADOW_LEN && cy + 1 < this.ch;
+    const up = (y & (CHUNK - 1)) < WALL_FACE && cy > 0;
     if (right) this.dirty[i + 1] = 1;
     if (down) this.dirty[i + this.cw] = 1;
     if (right && down) this.dirty[i + this.cw + 1] = 1;
+    if (up) this.dirty[i - this.cw] = 1;
   }
 
   // Cheap invalidation for a single cell whose change can't affect shadows.

@@ -2,6 +2,7 @@
 import { M, MAT_HP, SOLID } from '../world/materials.js';
 import { hash } from '../util/rng.js';
 import { F } from '../world/worldgen.js';
+import { WALL_FACE, SHADOW_LEN } from '../config.js';
 
 // Colors are packed as little-endian ABGR Uint32 (ImageData layout).
 export const g = (v) => ((255 << 24) | (v << 16) | (v << 8) | v) >>> 0;
@@ -36,14 +37,21 @@ const WRECK = [0, g(0x24), g(0x12), g(0x1a)];           // charred hull, tracks,
 
 export const DEBRIS_COLOR = [0, g(0x20), g(0x48), g(0x50), g(0x6a), RED, g(0x10), g(0x30), RED, OIL_DEEP, ICE_LIGHT, OIL_DEEP];
 
-const SHADOW_LEN = 5;
-
-// Light comes from the top-left: walls cast a halftone shadow down-right.
-function shadowed(grid, x, y) {
+// Light comes from the top-left: walls cast a shadow down-right.
+// Returns the distance to the occluding wall (0 = lit).
+function shadowDist(grid, x, y) {
   for (let k = 1; k <= SHADOW_LEN; k++) {
-    if (grid.isSolid(x - k, y - k) || grid.isSolid(x - k, y) || grid.isSolid(x, y - k)) return true;
+    if (grid.isSolid(x - k, y - k) || grid.isSolid(x - k, y) || grid.isSolid(x, y - k)) return k;
   }
-  return false;
+  return 0;
+}
+
+// 3/4 view: a wall shows its front face on the last WALL_FACE rows above the
+// floor, and its top everywhere else. Returns the row index from the floor
+// (1 = touching the floor) or 0 for the top.
+function faceRow(grid, x, y) {
+  for (let k = 1; k <= WALL_FACE; k++) if (!grid.isSolid(x, y + k)) return k;
+  return 0;
 }
 
 // 4x4 ordered dither thresholds, used to fade lit areas into black.
@@ -81,7 +89,12 @@ export function cellColor(grid, x, y) {
     const s = grid.scorch[i];
     if (s === 2) return (((x + y) & 3) === 0 || ((x - y) & 3) === 0) ? g(0x14) : g(0xa0);
     if (s === 1) return ((x + y * 2) % 5 === 0) ? g(0x30) : FLOOR[fl];
-    if (fl !== F.DOT && shadowed(grid, x, y)) return ((x + y) & 1) ? g(0x44) : g(0xc4);
+    const sd = fl !== F.DOT ? shadowDist(grid, x, y) : 0;
+    if (sd) { // ink cross-hatching, denser near the wall
+      const a = ((x + y) & 3) === 0, b = ((x - y) & 3) === 0;
+      if (a || (sd <= 4 && b)) return sd <= 2 ? g(0x1a) : g(0x44);
+      return sd <= 4 ? g(0xb8) : FLOOR[fl] === FLOOR[F.LINE] ? FLOOR[fl] : g(0xd4);
+    }
     return FLOOR[fl];
   }
 
@@ -89,15 +102,36 @@ export function cellColor(grid, x, y) {
   const d = grid.data[i];
   const chk = (x + y) & 1;
 
-  // Ink rim around masonry and wrecks: walls read in the dark, and every
-  // shell hole gets a crisp outline.
-  if (m === M.BRICK || m === M.STONE || m === M.WRECK) {
+  if (m === M.WRECK) {
     if (!grid.isSolid(x - 1, y) || !grid.isSolid(x + 1, y) || !grid.isSolid(x, y - 1) || !grid.isSolid(x, y + 1)) {
-      if (fr) return ICE_LIGHT;                           // iced-over edge
-      if (m === M.WRECK) return dark ? g(0x30) : g(0x06); // wrecks: black, burnt edge
-      return dark ? g(0x7c) : g(0xf0);
+      if (fr) return ICE_LIGHT;
+      return dark ? g(0x30) : g(0x06); // wrecks: black, burnt edge
     }
-    if (fr) return ((x + 2 * y) % 3 === 0) ? ICE_MID : ICE_DEEP; // frozen, brittle
+    if (fr) return ((x + 2 * y) % 3 === 0) ? ICE_MID : ICE_DEEP;
+  }
+
+  // Masonry in 3/4 view: brick front face above the floor, dark cap on top,
+  // white ink rim on the cap edges (so every shell hole gets a crisp outline).
+  if (m === M.BRICK || m === M.STONE) {
+    const fr0 = faceRow(grid, x, y);
+    const sideOpen = !grid.isSolid(x - 1, y) || !grid.isSolid(x + 1, y);
+    if (fr0) {
+      if (fr) return fr0 === 1 ? ICE_DEEP : ((x + 2 * y) % 3 === 0) ? ICE_LIGHT : ICE_MID;
+      if (fr0 === 1) return g(0x04);                          // contact line with the floor
+      if (sideOpen) return dark ? g(0x60) : g(0xc8);          // face edge
+      if (m === M.STONE) {
+        if (d === 0) return dark ? g(0x40) : g(0x9a);
+        return hurt && chk ? g(0x70) : fr0 === 2 ? g(0x26) : STONE_FACE[d];
+      }
+      if (d === 0) return dark ? g(0x3c) : hurt ? g(0x8c) : fr0 === 2 ? g(0x9a) : g(0xd2);
+      return hurt && chk ? g(0x6a) : fr0 === 2 ? g(0x0c) : BRICK_FACE[d]; // darker at the foot
+    }
+    if (sideOpen || !grid.isSolid(x, y - 1)) return fr ? ICE_LIGHT : dark ? g(0x7c) : g(0xf0);
+    if (fr) return ((x + 2 * y) % 3 === 0) ? ICE_MID : ICE_DEEP;
+    // cap: charcoal with a diagonal hatch, stone a little lighter
+    const hatch = ((x - y) & 3) === 0;
+    if (m === M.STONE) return hatch ? g(0x6a) : dark ? g(0x28) : g(0x46);
+    return hatch ? (dark ? g(0x2c) : g(0x3e)) : hurt && chk ? g(0x40) : g(0x1c);
   }
 
   switch (m) {

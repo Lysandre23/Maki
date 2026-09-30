@@ -20,3 +20,8 @@ export const ACTIVE_MARGIN = 96;
 
 // Gas (smoke/fire/steam) solver runs at 1/GAS_SCALE resolution.
 export const GAS_SCALE = 4;
+
+// 3/4 view: rows of front face shown at the foot of each wall, and how far
+// walls cast their shadow. Both affect neighbouring chunks when walls change.
+export const WALL_FACE = 5;
+export const SHADOW_LEN = 8;
