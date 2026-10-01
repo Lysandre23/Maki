@@ -4,30 +4,19 @@ A top-down, black-and-white comic-book tank roguelike where every pixel is simul
 
 See [GAME_DESIGN.md](GAME_DESIGN.md) for the full design and the roadmap (section 13).
 
-**Status:** milestone B2 done (tactical map, squads, orders, stances, fog of war), and the game is ported to native C++ with raylib (`native/`). Next: B3, enemy defenses, reinforcement waves and pacing, in C++.
+**Status:** milestone B2 done (tactical map, squads, orders, stances, fog of war), and the game is now native C++ with raylib. Next: B3, enemy defenses, reinforcement waves and pacing.
 
-## Run (native, C++ / raylib)
+## Build and run
 
 Needs CMake 3.24+ and a C++20 compiler (Visual Studio 2022/2026 on Windows). raylib is downloaded automatically at configure time.
 
 ```
-cd native
 cmake -S . -B build
 cmake --build build --config Release
 build/Release/maki.exe
 ```
 
 The window is resizable; F11 or Alt+Enter toggles borderless fullscreen. Letter shortcuts follow your keyboard layout (AZERTY and QWERTY both work), movement uses the WASD/ZQSD key positions.
-
-## Run (browser, original JavaScript version)
-
-Plain JavaScript (ES modules), no build step. Serve the folder with any static server:
-
-```
-python -m http.server 8080
-```
-
-Then open http://localhost:8080. The JavaScript version is the reference the C++ port was checked against; new features go into `native/`.
 
 ## Controls
 
@@ -46,7 +35,7 @@ Then open http://localhost:8080. The JavaScript version is the reference the C++
 | Tab / M | Tactical map (pauses the battle) |
 | O | Show / hide squad order arrows |
 | P / Esc | Pause |
-| F11 / Alt+Enter | Fullscreen (native) |
+| F11 / Alt+Enter | Fullscreen |
 | F3 | Performance overlay |
 
 On the tactical map:
@@ -63,7 +52,7 @@ On the tactical map:
 
 **Goal:** reach the flag on the east side and hold its zone until it's captured. Your allies start in two squads following you, and the yellow arrow on the screen edge points to the flag.
 
-The view fills the browser window: pixels are scaled by a whole number, and the visible area grows or shrinks to fit (up to 896x544 cells).
+The view fills the window: pixels are scaled by a whole number, and the visible area grows or shrinks to fit (up to 896x544 cells).
 
 ## Color code
 
@@ -71,19 +60,13 @@ The world is black and white. Colors carry meaning only: **yellow** HUD, **red**
 
 ## Tools
 
-Native headless tools (built with the game, in `native/build/Release/`):
+Headless tools, built with the game in `build/Release/`:
 
 ```
 maki_bench [ticks] [seed]            # bot-played battles: win time, kills, per-section timings
 maki_snapshot out.png [ticks] [seed] # render a frame of a bot-played battle to PNG
-maki_mapsum                          # checksums of generated battlefields (parity with the JS version)
+maki_mapsum                          # checksums of generated battlefields
 maki_gasbench                        # gas solver timings per stage
 maki --autotest --size 1600x900      # the bot plays, opens the map, gives orders, saves screenshots
 ```
 
-JavaScript (Node) equivalents of the first two:
-
-```
-node tools/bench.mjs [ticks]
-node tools/snapshot.mjs out.png [ticks] [seed]
-```
