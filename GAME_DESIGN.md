@@ -245,6 +245,15 @@ Fire stays **natural physics** and is rendered **orange**: explosions and burnin
 - **HUD:** squad panel under the top bar (pips per tank, order, stance).
 - **Debug:** `window.maki = { game, tac }` in the browser console.
 
+### 13.2.2 Native port: C++ / raylib (2026-10-01)
+The game left the browser. `native/` is a 1:1 port of the JavaScript version to C++20 + raylib 5.5 (fetched by CMake), and new work continues there.
+- **Layout:** `native/src/core/` is the simulation and pixel compositor with no raylib dependency (also used by the headless tools); `native/src/app/` is the window, input, HUD, overlays and tactical map; `native/tools/` holds the bench, snapshot, map checksum and gas benchmark.
+- **Parity:** world generation consumes the seeded RNG in exactly the same order as the JS, so a seed gives a bit-identical battlefield (`maki_mapsum` matches the JS checksums for mat, floor and light). With the bot playing seed 777 both versions visit 3 battles with 11 kills in 7200 ticks.
+- **Performance (bot, headless):** update ~0.85 ms per tick (JS ~2.15 ms), worst ~2.5-4 ms (JS ~22 ms, no GC pauses), frame composition ~0.25 ms (JS ~0.47 ms). The gas pressure solve now uses red-black SOR (no serial dependency: 1.7 ms -> 0.45 ms); the next step if needed is threading the solver.
+- **Presentation:** the pixel frame is uploaded to a texture each frame and drawn at an integer scale; vector overlays (popups, crosshair, telegraphs, capture ring, map) are drawn with raylib in cell units through a Camera2D; text uses the Bangers font (OFL, `native/assets/`), card descriptions use the system Comic Sans when present.
+- **Input:** letter shortcuts are resolved through the keyboard layout (GLFW key names), so AZERTY works; movement is positional (WASD = ZQSD). F11 / Alt+Enter toggles borderless fullscreen.
+- **Gotchas:** raylib defines macros named `PI`, `BLACK`, `RED`, `GOLD`... so core constants use `kPI` and `C_*`; C++ leaves argument evaluation order unspecified, so every `rnd()`/`rng()` call is in its own statement to keep the JS order.
+
 ### 13.3 B3: Enemy and pacing
 1. **Defenses** (worldgen):
    - sandbag walls (new **SAND** material: solid, low HP, absorbs blasts);

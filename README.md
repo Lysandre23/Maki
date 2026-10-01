@@ -4,9 +4,22 @@ A top-down, black-and-white comic-book tank roguelike where every pixel is simul
 
 See [GAME_DESIGN.md](GAME_DESIGN.md) for the full design and the roadmap (section 13).
 
-**Status:** milestone B2 done (tactical map, squads, orders, stances, fog of war). Next: B3, enemy defenses, reinforcement waves and pacing.
+**Status:** milestone B2 done (tactical map, squads, orders, stances, fog of war), and the game is ported to native C++ with raylib (`native/`). Next: B3, enemy defenses, reinforcement waves and pacing, in C++.
 
-## Run
+## Run (native, C++ / raylib)
+
+Needs CMake 3.24+ and a C++20 compiler (Visual Studio 2022/2026 on Windows). raylib is downloaded automatically at configure time.
+
+```
+cd native
+cmake -S . -B build
+cmake --build build --config Release
+build/Release/maki.exe
+```
+
+The window is resizable; F11 or Alt+Enter toggles borderless fullscreen. Letter shortcuts follow your keyboard layout (AZERTY and QWERTY both work), movement uses the WASD/ZQSD key positions.
+
+## Run (browser, original JavaScript version)
 
 Plain JavaScript (ES modules), no build step. Serve the folder with any static server:
 
@@ -14,7 +27,7 @@ Plain JavaScript (ES modules), no build step. Serve the folder with any static s
 python -m http.server 8080
 ```
 
-Then open http://localhost:8080.
+Then open http://localhost:8080. The JavaScript version is the reference the C++ port was checked against; new features go into `native/`.
 
 ## Controls
 
@@ -33,6 +46,7 @@ Then open http://localhost:8080.
 | Tab / M | Tactical map (pauses the battle) |
 | O | Show / hide squad order arrows |
 | P / Esc | Pause |
+| F11 / Alt+Enter | Fullscreen (native) |
 | F3 | Performance overlay |
 
 On the tactical map:
@@ -57,9 +71,19 @@ The world is black and white. Colors carry meaning only: **yellow** HUD, **red**
 
 ## Tools
 
-Headless (Node) helpers that run the simulation without a browser:
+Native headless tools (built with the game, in `native/build/Release/`):
 
 ```
-node tools/bench.mjs [ticks]                    # performance of a bot-played battle
-node tools/snapshot.mjs out.png [ticks] [seed]  # render a frame of a bot-played battle to PNG
+maki_bench [ticks] [seed]            # bot-played battles: win time, kills, per-section timings
+maki_snapshot out.png [ticks] [seed] # render a frame of a bot-played battle to PNG
+maki_mapsum                          # checksums of generated battlefields (parity with the JS version)
+maki_gasbench                        # gas solver timings per stage
+maki --autotest --size 1600x900      # the bot plays, opens the map, gives orders, saves screenshots
+```
+
+JavaScript (Node) equivalents of the first two:
+
+```
+node tools/bench.mjs [ticks]
+node tools/snapshot.mjs out.png [ticks] [seed]
 ```
