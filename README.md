@@ -4,7 +4,7 @@ A top-down, black-and-white comic-book tank roguelike where every pixel is simul
 
 See [GAME_DESIGN.md](GAME_DESIGN.md) for the full design and the roadmap (section 13).
 
-**Status:** milestone B2 done (tactical map, squads, orders, stances, fog of war), and the game is now native C++ with raylib. Next: B3, enemy defenses, reinforcement waves and pacing.
+**Status:** milestone B3 built (sandbag defenses, anti-tank guns, enemy reinforcement waves, enemy commander, slower pacing), on top of B2 (tactical map, squads, fog of war). Native C++ with raylib. Next: B4, cards v2 and the full 7-battle run.
 
 ## Build and run
 
@@ -50,7 +50,7 @@ On the tactical map:
 | S | Stance: aggressive, or cautious (falls back to you below 40% hull) |
 | Tab / M / Esc | Back to the battle |
 
-**Goal:** reach the flag on the east side and hold its zone until it's captured. Your allies start in two squads following you, and the yellow arrow on the screen edge points to the flag.
+**Goal:** reach the flag on the east side and hold its zone until it's captured (30 s alone, faster with allies; enemies in the zone win it back). Enemy reinforcements arrive from the east every 45 s until the flag falls. Your allies start in two squads following you, and the yellow arrow on the screen edge points to the flag.
 
 The view fills the window: pixels are scaled by a whole number, and the visible area grows or shrinks to fit (up to 896x544 cells).
 
@@ -67,6 +67,8 @@ maki_bench [ticks] [seed]            # bot-played battles: win time, kills, per-
 maki_snapshot out.png [ticks] [seed] # render a frame of a bot-played battle to PNG
 maki_mapsum                          # checksums of generated battlefields
 maki_gasbench                        # gas solver timings per stage
+maki_pacing [level] [seeds]          # a careful bot plays one battle per seed: outcome and duration
+maki_pacing campaign [seeds]         # full runs, battle after battle
 maki --autotest --size 1600x900      # the bot plays, opens the map, gives orders, saves screenshots
 ```
 

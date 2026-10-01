@@ -15,7 +15,7 @@ constexpr uint32_t SMOKE = g(0x2e), SMOKE_ON_DARK = g(0x74), SOOT = g(0x10);
 constexpr uint32_t STEAM_ON_LIGHT = g(0xa8);
 constexpr uint32_t TRAIL = g(0x78);
 constexpr uint32_t FIRE_CYCLE[4] = {C_ORANGE, C_FLAME_HOT, C_ORANGE, g(0x18)};
-constexpr uint32_t DEBRIS_COLOR[12] = {0, g(0x20), g(0x48), g(0x50), g(0x6a), C_ORANGE, g(0x10), g(0x30), C_ORANGE, g(0x50), g(0x22), g(0xb0)};
+constexpr uint32_t DEBRIS_COLOR[13] = {0, g(0x20), g(0x48), g(0x50), g(0x6a), C_ORANGE, g(0x10), g(0x30), C_ORANGE, g(0x50), g(0x22), g(0xb0), g(0xb4)};
 
 inline bool inView(int x, int y) { return x >= 0 && y >= 0 && x < VIEW_W && y < VIEW_H; }
 } // namespace

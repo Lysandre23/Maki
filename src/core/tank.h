@@ -19,6 +19,9 @@ struct TankStats {
   ShellStats shell;
   int body, top;
   double range;
+  double sight = 560;      // how far the AI engages
+  double barrel = 0.5;     // barrel length, as a fraction of the hull length
+  bool immobile = false;   // towed gun: no tracks, no engine
 };
 
 const TankStats& tankType(const std::string& type);

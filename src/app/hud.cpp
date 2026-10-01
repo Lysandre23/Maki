@@ -40,6 +40,13 @@ void Hud::topBar(Game& game) {
   std::string flagTxt = f.contested ? "CONTESTED!" : std::to_string((int)jsround(f.progress * 100)) + "%";
   std::string s = "BATTLE " + std::to_string(game.level) + " / " + std::to_string(BATTLES) + "    ALLIES : " + std::to_string(allies) +
                   "    ENEMIES : " + std::to_string(alive) + "    KILLS : " + std::to_string(game.kills) + "    FLAG : " + flagTxt;
+  int w = game.waveIn();
+  if (w >= 0) {
+    int sec = (w + 59) / 60;
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "    NEXT WAVE : %d:%02d", sec / 60, sec % 60);
+    s += buf;
+  }
   hudText(s, o.x + 14 * k, o.y + 10 * k, 26 * k, HUD_YELLOW, k);
 }
 

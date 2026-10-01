@@ -14,12 +14,26 @@ static std::array<double, NPARTS> hpOf(double hull, double track, double turret,
   return {hull, track, track, turret, cannon, engine, ammo};
 }
 
+// Pacing (B3): everything moves 15% slower and reloads 20% slower than the
+// B1/B2 tuning, so fights last and fronts form.
+static constexpr double PACE_SPEED = 0.85, PACE_RELOAD = 1.2;
+
+static TankStats paced(TankStats t) { t.speed *= PACE_SPEED; t.reload *= PACE_RELOAD; return t; }
+
 const TankStats& tankType(const std::string& type) {
-  static const TankStats player{40, 26, 1.5, 0.05, 0.09, 36, 0.5, hpOf(300, 80, 80, 70, 80, 60), {8, 55, 12, 13}, 0xec, 0xfc, 0};
-  static const TankStats scout{32, 20, 1.6, 0.065, 0.08, 60, 0.8, hpOf(55, 25, 25, 20, 25, 20), {6.5, 18, 8, 9}, 0xb4, 0xc8, 140};
-  static const TankStats gunner{40, 26, 1.0, 0.045, 0.05, 95, 0.55, hpOf(110, 45, 45, 40, 45, 35), {7, 33, 11, 12}, 0x8c, 0xa4, 230};
-  static const TankStats heavy{48, 32, 0.65, 0.03, 0.035, 125, 0.2, hpOf(220, 80, 80, 70, 70, 60), {6.5, 48, 15, 15}, 0x64, 0x7c, 190};
-  static const TankStats boss{64, 42, 0.5, 0.022, 0.04, 70, 0.2, hpOf(520, 140, 140, 120, 120, 100), {7, 45, 18, 17}, 0x4a, 0x60, 210};
+  static const TankStats player = paced({40, 26, 1.5, 0.05, 0.09, 36, 0.5, hpOf(300, 80, 80, 70, 80, 60), {8, 55, 12, 13}, 0xec, 0xfc, 0});
+  static const TankStats scout = paced({32, 20, 1.6, 0.065, 0.08, 60, 0.8, hpOf(55, 25, 25, 20, 25, 20), {6.5, 18, 8, 9}, 0xb4, 0xc8, 140});
+  static const TankStats gunner = paced({40, 26, 1.0, 0.045, 0.05, 95, 0.55, hpOf(110, 45, 45, 40, 45, 35), {7, 33, 11, 12}, 0x8c, 0xa4, 230});
+  static const TankStats heavy = paced({48, 32, 0.65, 0.03, 0.035, 125, 0.2, hpOf(220, 80, 80, 70, 70, 60), {6.5, 48, 15, 15}, 0x64, 0x7c, 190});
+  static const TankStats boss = paced({64, 42, 0.5, 0.022, 0.04, 70, 0.2, hpOf(520, 140, 140, 120, 120, 100), {7, 45, 18, 17}, 0x4a, 0x60, 210});
+  // Anti-tank gun: small, fragile, can't move, long barrel, hits hard from far.
+  // Its gun shield makes the front tough; flank it.
+  static const TankStats atgun = [] {
+    TankStats t = paced({22, 18, 0, 0, 0.03, 150, 0.45, hpOf(70, 1, 35, 30, 1, 25), {9.5, 62, 10, 12}, 0x9a, 0xb0, 420});
+    t.sight = 680; t.barrel = 1.15; t.immobile = true;
+    return t;
+  }();
+  if (type == "atgun") return atgun;
   if (type == "player") return player;
   if (type == "scout") return scout;
   if (type == "gunner") return gunner;
@@ -41,9 +55,10 @@ void Tank::setGeometry() {
   hl = len / 2; hw = wid / 2;
   trackW = std::max(3.0, jsround(wid * 0.22));
   turretR = wid * 0.34;
-  barrelLen = len * 0.5;
+  barrelLen = len * s.barrel;
   turretOff = -len * 0.06;
-  engineLen = std::max(4.0, len * 0.18);
+  engineLen = s.immobile ? 0 : std::max(4.0, len * 0.18);
+  if (s.immobile) trackW = 0; // no tracks: the whole flank is hull
   ammoLen = std::max(3.0, len * 0.14);
   mass = len * wid;
   bound = std::hypot(hl, hw);
@@ -242,6 +257,7 @@ Part Tank::hitTest(double px, double py) const {
 bool Tank::damagePart(Part name, double amount) {
   auto& p = parts[name];
   if (p.hp <= 0 || amount <= 0) return false;
+  if (s.immobile && (name == TRACK_L || name == TRACK_R || name == ENGINE)) return false; // has none
   p.hp -= amount * dmgTaken;
   hurtT = 180;
   if (p.hp > 0) return false;

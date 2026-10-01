@@ -114,7 +114,8 @@ int explode(Grid& grid, Debris& debris, double x, double y, double r, double pow
 
       if (dmg >= hp[i]) {
         if (m == M::BARREL && hooks) hooks->onBarrel(data[i]);
-        mat[i] = M::EMPTY; hp[i] = 0; data[i] = 0;
+        // sandbags spill: the cell becomes a low heap of rubble instead of a hole
+        mat[i] = m == M::SAND ? M::RUBBLE : M::EMPTY; hp[i] = m == M::SAND ? MAT_HP[M::RUBBLE] : 0; data[i] = 0;
         grid.markDirty(xx, yy);
         grid.navTouch(xx, yy);
         destroyed++;

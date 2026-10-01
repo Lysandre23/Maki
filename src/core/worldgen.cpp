@@ -113,7 +113,7 @@ void farmhouse(Grid& g, int x, int y, int w, int h, Rng& rng, const AvoidFn& avo
 }
 
 std::vector<std::string> roster(int level, Rng& rng) {
-  int n = 5 + level;
+  int n = 6 + level;
   std::vector<std::string> out;
   for (int i = 0; i < n; i++) {
     double r = rng();
@@ -124,19 +124,82 @@ std::vector<std::string> roster(int level, Rng& rng) {
   return out;
 }
 
-int sizeOf(const std::string& t) { return t == "scout" ? 22 : t == "gunner" ? 26 : t == "heavy" ? 30 : 40; }
+int sizeOf(const std::string& t) {
+  return t == "atgun" ? 14 : t == "scout" ? 22 : t == "gunner" ? 26 : t == "heavy" ? 30 : 40;
+}
+
+// Cells written while building one structure, so it can be taken back if it
+// turns out to cut the battlefield in two.
+struct Undo {
+  struct Cell { int i; uint8_t mat, hp, data, floor; };
+  std::vector<Cell> cells;
+  void save(const Grid& g, int i) { cells.push_back({i, g.mat[i], g.hp[i], g.data[i], g.floor[i]}); }
+  void revert(Grid& g) {
+    for (auto it = cells.rbegin(); it != cells.rend(); ++it) {
+      g.mat[it->i] = it->mat; g.hp[it->i] = it->hp; g.data[it->i] = it->data; g.floor[it->i] = it->floor;
+    }
+    cells.clear();
+  }
+};
+
+// Sandbag cell: rows of bags (data = shade variant).
+void sandCell(Grid& g, int x, int y, Undo& u) {
+  int i = y * g.w + x;
+  uint8_t m = g.mat[i];
+  if (m != M::EMPTY && m != M::GRASS && m != M::RUBBLE) return;
+  u.save(g, i);
+  g.setCell(x, y, M::SAND, (uint8_t)(hash(x / 6, y / 3) % 3));
+}
+
+// Can a tank still drive from a to b?
+bool connected(const Grid& g, Pt a, Pt b) {
+  Nav nav(g, 12);
+  nav.rebuild(g);
+  return nav.field(b.x, b.y)[nav.node(a.x, a.y)] >= 0;
+}
+
+// Dug-in tank position: a U of sandbags open to the east (the defenders'
+// rear), its back wall toward the player's approach. The tank sits at (cx, cy).
+constexpr int DUG_HALF = 30;
+bool dugInFits(const Grid& g, int cx, int cy) {
+  return areaFree(g, cx - 36, cy - DUG_HALF - 2, 50, 2 * DUG_HALF + 4);
+}
+void dugIn(Grid& g, int cx, int cy, Undo& u) {
+  for (int y = cy - DUG_HALF; y <= cy + DUG_HALF; y++) {
+    for (int x = cx - 34; x <= cx + 6; x++) {
+      bool back = x <= cx - 28, arm = y <= cy - DUG_HALF + 5 || y >= cy + DUG_HALF - 5;
+      if (!g.inBounds(x, y)) continue;
+      int i = y * g.w + x;
+      if (back || arm) sandCell(g, x, y, u);
+      else if (g.mat[i] == M::GRASS) { u.save(g, i); g.mat[i] = M::EMPTY; g.floor[i] = F::FLAT; } // dug-out floor
+    }
+  }
+}
+
+// Small crescent of sandbags in front (west) of a towed gun.
+void gunPit(Grid& g, int cx, int cy, Undo& u) {
+  for (int y = cy - 24; y <= cy + 24; y++) {
+    for (int x = cx - 24; x <= cx; x++) {
+      double d = std::hypot(x - cx, y - cy), a = std::atan2(y - cy, x - cx);
+      if (d >= 14 && d <= 21 && std::abs(angDiff(a, kPI)) < 1.15 && g.inBounds(x, y)) sandCell(g, x, y, u);
+    }
+  }
+}
 
 // Defenders take spots in the enemy half: reachable, covered from the
-// player's approach (hedges!), spread out; a few guard the flag.
-std::vector<EnemySpawn> placeEnemies(Grid& g, Rng& rng, Pt spawn, Pt flag, const std::vector<std::string>& types) {
+// player's approach (hedges, sandbags), spread out; a few guard the flag.
+// Dug-in positions are taken first by tanks that fit; anti-tank guns look for
+// long open sightlines to the west.
+std::vector<EnemySpawn> placeEnemies(Grid& g, Rng& rng, Pt spawn, Pt flag, const std::vector<std::string>& types, const std::vector<Pt>& dug) {
   const int W = g.w, H = g.h;
   Nav nav(g, 12);
   nav.rebuild(g);
   const auto& dist = nav.field(spawn.x, spawn.y);
-  struct Cand { int x, y; double base; };
+  struct Cand { int x, y; double base; bool dug; double open; };
   std::vector<Cand> cands;
+  for (const Pt& d : dug) cands.push_back({(int)d.x, (int)d.y, 4.0 + d.x / W, true, 0});
   for (int y = 50; y < H - 50; y += 20) {
-    for (int x = (int)jsround(W * 0.42); x < W - 50; x += 20) {
+    for (int x = (int)jsround(W * 0.32); x < W - 50; x += 20) { // the front starts a third of the way in
       if (!areaFree(g, x - 24, y - 24, 48, 48)) continue;
       if (dist[(y / nav.c) * nav.w + (x / nav.c)] < 0) continue;
       double cover = 0;
@@ -144,7 +207,9 @@ std::vector<EnemySpawn> placeEnemies(Grid& g, Rng& rng, Pt spawn, Pt flag, const
         if (g.isSolid(x - s, y)) { cover = 2; break; } // something between us and the west
       }
       double toFlag = std::hypot(x - flag.x, y - flag.y);
-      cands.push_back({x, y, cover + (toFlag < 260 ? 1.5 : 0) + x / (double)W});
+      int open = 0; // clear line of fire toward the west
+      while (open < 600 && !g.isSolid(x - 30 - open, y)) open += 10;
+      cands.push_back({x, y, cover + (toFlag < 260 ? 1.5 : 0) + x / (double)W, false, (double)open});
     }
   }
   std::vector<EnemySpawn> out;
@@ -155,16 +220,24 @@ std::vector<EnemySpawn> placeEnemies(Grid& g, Rng& rng, Pt spawn, Pt flag, const
     for (int relax = 0; relax < 2 && !best; relax++) {
       double minD = relax ? 70 : 130;
       for (const auto& c : cands) {
-        if (!areaFree(g, (int)std::floor(c.x - s), (int)std::floor(c.y - s), 2 * s, 2 * s)) continue;
+        bool gun = type == "atgun";
+        if (c.dug ? (gun || type == "boss") : !areaFree(g, (int)std::floor(c.x - s), (int)std::floor(c.y - s), 2 * s, 2 * s)) continue;
         bool near = false;
         for (const auto& e : out) if (sq(e.x - c.x) + sq(e.y - c.y) < minD * minD) { near = true; break; }
         if (near) continue;
-        double sc = c.base + (type == "boss" ? 3 - std::hypot(c.x - flag.x, c.y - flag.y) / 150 : 0);
+        double sc = gun ? c.open / 150 + (c.x > W * 0.5 && c.x < W * 0.85 ? 1 : 0)
+                        : c.base + (type == "boss" ? 3 - std::hypot(c.x - flag.x, c.y - flag.y) / 150 : 0);
         sc += rng() * 2;
         if (sc > bs) { bs = sc; best = &c; }
       }
     }
-    if (best) out.push_back({type, (double)best->x, (double)best->y, kPI});
+    if (!best) continue;
+    out.push_back({type, (double)best->x, (double)best->y, kPI});
+    if (type == "atgun") {
+      Undo u;
+      gunPit(g, best->x, best->y, u);
+      if (!connected(g, spawn, flag)) u.revert(g); // never seal the way to the flag
+    }
   }
   return out;
 }
@@ -233,6 +306,7 @@ Layout generateBattle(Grid& g, Rng& rng, int level) {
   // --- bocage: north-south hedgerows with gaps, plus east-west stubs
   auto onRoad = [&](double x, double y) { return std::abs(y - roadY(x)) < 16; };
   std::vector<int> cols;
+  std::vector<Pt> choke; // hedgerow gaps on the enemy side: dug-in candidates
   for (int cx = 460; cx < W - 360; cx += 380 + (int)std::floor(rng() * 120)) cols.push_back(cx);
   for (int x0 : cols) {
     std::vector<std::pair<int, int>> gaps;
@@ -241,6 +315,9 @@ Layout generateBattle(Grid& g, Rng& rng, int level) {
       int gy = 40 + (int)std::floor(rng() * (H - 160));
       int ge = gy + 70 + (int)std::floor(rng() * 40);
       gaps.push_back({gy, ge});
+      // a dug-in covers the gap from beside its exit, not in front of it
+      double side = rng() < 0.5 ? -1 : 1;
+      if (x0 > W * 0.3) choke.push_back({x0 + 70.0, (gy + ge) / 2.0 + side * ((ge - gy) / 2.0 + 40)});
     }
     double ph = rng() * 6;
     for (int y = BORDER; y < H - BORDER; y++) {
@@ -363,8 +440,30 @@ Layout generateBattle(Grid& g, Rng& rng, int level) {
   // hp for everything written directly
   for (size_t i = 0; i < g.mat.size(); i++) if (g.mat[i] == M::GRASS) g.hp[i] = 1;
 
+  // --- defenses: dug-in positions around the flag first, then at random
+  // hedgerow gaps on the enemy side
+  std::vector<Pt> dug;
+  int nDug = 4 + level / 2;
+  auto tryDug = [&](Pt p) {
+    int cx = (int)p.x, cy = (int)p.y;
+    if ((int)dug.size() >= nDug || cx > W - 60 || cy < 50 || cy > H - 50 || onRoad(cx, cy) || avoid(cx, cy) || !dugInFits(g, cx, cy)) return;
+    for (const Pt& d : dug) if (std::hypot(d.x - cx, d.y - cy) < 110) return;
+    Undo u;
+    dugIn(g, cx, cy, u);
+    if (!connected(g, spawn, flag)) { u.revert(g); return; } // never seal the way to the flag
+    dug.push_back({(double)cx, (double)cy});
+  };
+  for (double a : {-0.8, 0.0, 0.8}) tryDug({flag.x + std::cos(kPI + a) * 120, flag.y + std::sin(kPI + a) * 120});
+  for (size_t k = 0; k < choke.size(); k++) {
+    size_t j = k + (size_t)std::floor(rng() * (choke.size() - k));
+    std::swap(choke[k], choke[j]);
+    tryDug(choke[k]);
+  }
+
   auto types = roster(level, rng);
-  L.enemies = placeEnemies(g, rng, spawn, flag, types);
+  int guns = 1 + (level >= 3) + (level >= 5);
+  for (int k = 0; k < guns; k++) types.push_back("atgun");
+  L.enemies = placeEnemies(g, rng, spawn, flag, types, dug);
   bakeDaylight(g, seed + 99);
 
   g.structSize.assign(SID + 1, 0);

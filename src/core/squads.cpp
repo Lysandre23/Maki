@@ -58,7 +58,7 @@ static bool covered(const Grid& grid, double x, double y, double tx, double ty) 
 }
 
 // Best passable spot near `slot` with cover from `threat`, avoiding `taken`.
-static Pt coverSpot(Game& game, Pt slot, const Known* threat, const std::vector<Pt>& taken) {
+static Pt coverSpot(Game& game, Pt slot, const Pt* threat, const std::vector<Pt>& taken) {
   const Nav& nav = game.nav;
   int ci = (int)std::floor(slot.x / nav.c), cj = (int)std::floor(slot.y / nav.c);
   bool found = false;
@@ -109,7 +109,8 @@ void planSquad(Game& game, Squad& sq) {
   sq.planT = game.tick;
   sq.planN = (int)live.size();
   if (!sq.hasGoal) return;
-  const Known* threat = sq.order == "hold" ? game.threatNear(sq.goal.x, sq.goal.y) : nullptr;
+  Pt threatPos;
+  const Pt* threat = sq.order == "hold" && game.threatNear(sq.goal.x, sq.goal.y, sq.team, threatPos) ? &threatPos : nullptr;
   std::vector<Pt> taken;
   for (int k = 0; k < (int)live.size(); k++) {
     Pt slot = slotAt(sq, k, (int)live.size());
@@ -121,6 +122,11 @@ void planSquad(Game& game, Squad& sq) {
 }
 
 void updateSquads(Game& game) {
+  for (auto& sqp : game.enemySquads) {
+    Squad& sq = *sqp;
+    auto live = sq.alive();
+    if (!live.empty() && sq.hasGoal && (game.tick - sq.planT > (sq.order == "hold" ? REPLAN : 600) || (int)live.size() != sq.planN)) planSquad(game, sq);
+  }
   for (auto& sqp : game.squads) {
     Squad& sq = *sqp;
     auto live = sq.alive();

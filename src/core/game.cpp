@@ -31,7 +31,7 @@ static constexpr int SMOKE_PER_BATTLE = 3;
 static constexpr double MG_OVERHEAT = 60;
 static constexpr int RUSH_TICKS = 180;       // LOADER RUSH: reload x2 for 3 s after a kill
 static constexpr int ABANDON_TICKS = 120;    // crew bails out, then the tank blows
-static constexpr int CAPTURE_TICKS = 8 * 60; // flag capture time with the player alone
+static constexpr int CAPTURE_TICKS = 30 * 60; // flag capture time with the player alone
 static const char* START_ROSTER[4] = {"gunner", "gunner", "scout", "scout"};
 
 // Formation slots around the player's tank, in its frame (x forward).
@@ -87,6 +87,8 @@ void Game::startBattle() {
   scrap.clear();
   smokeClouds.clear();
   vision.clear();
+  enemySquads.clear();
+  resetWaves();
   barrels = layout.barrels;
   const Mods& m = player->mods;
   emergency = EMERGENCY_PER_BATTLE + m.extraEmergency;
@@ -417,6 +419,11 @@ void Game::blast(double x, double y, double r, double power, BlastOpts opts) {
     double edge = std::max(0.0, d - t->hw);
     if (edge < r && !opts.noSplash) {
       double dmg = power * 1.1 * (1 - edge / r);
+      // sandbags between the blast and the tank soak most of it up
+      for (double k = 0.15; k < 1; k += 0.15) {
+        int sx = (int)std::floor(x + dx * k), sy = (int)std::floor(y + dy * k);
+        if (grid.inBounds(sx, sy) && grid.mat[sy * grid.w + sx] == M::SAND) { dmg *= 0.4; break; }
+      }
       t->damagePart(HULL, dmg);
       double v = -dx * std::sin(t->a) + dy * std::cos(t->a); // blast side, in tank frame
       t->damagePart(v > 0 ? TRACK_L : TRACK_R, dmg * 0.5);
@@ -577,15 +584,21 @@ void Game::toggleStance(int id) {
   stances[id] = sq->stance;
 }
 
-// Nearest enemy we know about (seen or remembered) to a point, for cover planning.
-const Known* Game::threatNear(double x, double y) const {
-  const Known* best = nullptr;
+bool Game::threatNear(double x, double y, int team, Pt& out) const {
   double bd = 1e300;
-  for (const Known& k : vision.known) {
-    double d = sq(k.x - x) + sq(k.y - y);
-    if (d < bd) { bd = d; best = &k; }
+  if (team == 0) {
+    for (const Known& k : vision.known) {
+      double d = sq(k.x - x) + sq(k.y - y);
+      if (d < bd) { bd = d; out = {k.x, k.y}; }
+    }
+  } else {
+    for (Tank* t : friendlies) {
+      if (!t->alive) continue;
+      double d = sq(t->x - x) + sq(t->y - y);
+      if (d < bd) { bd = d; out = {t->x, t->y}; }
+    }
   }
-  return best;
+  return bd < 1e300;
 }
 
 void Game::chooseReward(int i) {
@@ -594,14 +607,16 @@ void Game::chooseReward(int i) {
   r.apply(*player, *this);
   build.push_back(r.id);
   for (auto& tag : r.tags) tagCount[tag]++;
-  // patch-up between battles: +20%, and wrecked parts come back at 30%
+  // patch-up between battles: +40%, and wrecked parts come back at 40%
+  // (battles are long since B3: more damage to carry)
   auto patch = [](std::array<PartHp, NPARTS>& parts, bool full) {
     for (auto& p : parts) {
       double mx = p.max;
-      p.hp = full ? mx : p.hp <= 0 ? mx * 0.3 : std::min(mx, p.hp + mx * 0.2);
+      p.hp = full ? mx : p.hp <= 0 ? mx * 0.4 : std::min(mx, p.hp + mx * 0.4);
     }
   };
   patch(player->parts, false);
+  spares = std::min(99.0, spares + 20); // resupply: the crew never starts a battle empty-handed
   for (auto& r2 : roster) {
     if (!r2->hasHp) continue;
     Tank tmp(r2->type, 0, 0, 0, 0);
@@ -643,6 +658,7 @@ void Game::update(const Input& inp) {
 
   if (playing) {
     vision.update(*this, friendlies, enemies);
+    if (state == "play") updateWaves();
     updateSquads(*this);
   }
   for (Tank* t : tanks) {
@@ -786,7 +802,7 @@ void Game::updateProjectiles() {
 }
 
 // Capture fills while friendlies (and no enemies) are in the zone; more
-// friendlies capture faster. Contested = frozen; empty = slow decay.
+// friendlies capture faster. Contested = slowly lost; empty = slow decay.
 void Game::updateFlag() {
   Flag& f = flag;
   int friends = 0, foes = 0;
@@ -798,6 +814,7 @@ void Game::updateFlag() {
   double rate = (1.0 / CAPTURE_TICKS) * player->mods.quickCapture;
   if (friends && !foes) f.progress = std::min(1.0, f.progress + rate * (1 + 0.3 * (friends - 1)));
   else if (!friends) f.progress = std::max(0.0, f.progress - rate * 0.25);
+  else f.progress = std::max(0.0, f.progress - rate * 0.5); // contested: the defenders win it back
   if (f.progress >= 1) {
     state = "cleared"; stateT = 0;
     saveRoster();
@@ -811,7 +828,7 @@ void Game::missionKills() {
   for (Tank* t : tanks) {
     if (!t->alive || t->isPlayer) continue;
     auto& pt = t->parts;
-    bool stuck = pt[ENGINE].hp <= 0 || (pt[TRACK_L].hp <= 0 && pt[TRACK_R].hp <= 0);
+    bool stuck = t->s.immobile || pt[ENGINE].hp <= 0 || (pt[TRACK_L].hp <= 0 && pt[TRACK_R].hp <= 0);
     if (!t->abandonT && pt[CANNON].hp <= 0 && stuck) {
       t->abandonT = ABANDON_TICKS;
       popup("ABANDONED!", t->x, t->y - t->hw - 12, 14, !t->team, true);

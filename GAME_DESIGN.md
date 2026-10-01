@@ -160,8 +160,8 @@ Fire stays **natural physics** and is rendered **orange**: explosions and burnin
 |---|---|---|
 | **B1** | Elements removed, new color rule, wide Field battlefield, allies, flag capture | **Done** (2026-10-01) |
 | **B2** | Tactical map: pause, schematic view, squads, orders, stances, fog of war | **Done** (2026-10-01) |
-| B3 | Enemy defenses, reinforcement waves, commander AI, 5-minute pacing | Next |
-| B4 | Cards v2, 7-battle run, roster persistence | |
+| **B3** | Enemy defenses, reinforcement waves, commander AI, 5-minute pacing | **Built** (2026-10-01), pacing awaits playtesting |
+| B4 | Cards v2, 7-battle run, roster persistence | Next |
 | B5 | Biomes: Forest, Beach, Village | |
 | B6 | Polish: sound, readability, balance, stutters | |
 
@@ -272,6 +272,18 @@ The game left the browser: a 1:1 port of the JavaScript version to C++20 + rayli
    - Tune with the headless bot until a battle lasts ~5 minutes and the player is under real pressure.
 5. **Done when:** battles last ~5 minutes and feel like pushing a front line, not clearing static targets.
 
+#### 13.3.1 B3: what was built (state on 2026-10-01)
+- **SAND** (material 12, `src/core/materials.h`): solid, 5 HP, not flammable. Destroyed sand spills into rubble instead of leaving a hole. A tank with sandbags between it and a blast takes 40% of the splash (`Game::blast`). Drawn as staggered rows of bags.
+- **Dug-in positions** (`dugIn` in `src/core/worldgen.cpp`): U of sandbags (back wall west, open east), the tank sits inside facing west. 4 + level/2 per battle: up to three around the flag (120 cells west of it), the rest beside hedgerow gaps on the enemy side (covering the exit, not in it). Defenders take them first (`placeEnemies`, dug-in candidates score +4).
+- **Safety:** every sandbag structure is checked with the nav grid; if it cuts the spawn off from the flag it is removed (`Undo` + `connected`).
+- **Anti-tank gun** (`atgun` in `src/core/tank.cpp`): 22x18, no tracks or engine (`immobile`: never drives, only track/engine-less hit zones, abandoned as soon as the gun is knocked out), long barrel, sight 680, shell 62 dmg. Sandbag crescent in front. 1 + (level >= 3) + (level >= 5) per battle, placed where the line of fire to the west is longest.
+- **Defenders:** 6 + level tanks (was 5 + level), placed from 32% of the map width (was 42%), so the front starts earlier.
+- **Waves** (`src/core/commander.cpp`): first at 20 s, then every 45 s; size min(4, 2 + (level-1)/2 + wave/3); spawn at the east edge in a random lane; none while 14 + level enemies are alive; they stop when the flag falls. HUD shows `NEXT WAVE m:ss`.
+- **Commander** (every 3 s): lanes north / centre / south; strength = tank worth x hull (player 3, scout 1, gunner 1.5, heavy 2.5, boss 5); only friendlies within 560 of an enemy count. If fewer than two defenders guard the flag, the closest wave squad holds it. Other squads go to the lane with the strongest push (strength x how far east): counter-attack (`COUNTER-ATTACK!`) when 1.5x stronger there, else hold a line 260 cells in front of it. Orders are only re-issued when they change. Enemy squads use the same squad/order system as ours (`Squad::team = 1`); their Hold cover is planned against our real positions.
+- **Pacing:** speeds x0.85 and reloads x1.2 for every tank type (`PACE_SPEED`, `PACE_RELOAD`); AI sight 560 (was 460) per type (`TankStats::sight`); flag capture 30 s alone (was 8 s); a contested flag now slowly goes back to the defenders.
+- **Economy:** between battles parts are patched +40% (was +20%), wrecked parts come back at 40% (was 30%), +20 spares.
+- **Measured** with `maki_pacing` (careful bot: stops to fight what it sees, repairs, smokes, shoots through obstacles when stuck): battle 1 captured in ~2 min (6-8 of 8), most runs end in battle 2-3. The bot aims perfectly but has no tactics (no cover, no squad orders, no scrap pickup), so real battles should run longer; the 5-minute target needs a human playtest. Tuning knobs: `CAPTURE_TICKS` (game.cpp), `WAVE_TICKS`, `FIRST_WAVE_TICKS`, `MAX_ALIVE` (commander.cpp), roster size (worldgen.cpp), `PACE_*` (tank.cpp).
+
 ### 13.4 B4: Full run and cards v2
 1. **Run:** 7 battles (6 + final assault with the boss tank and stronger defenses). Rewards after each won battle; defeat when the player's tank dies.
 2. **Card catalogue:**
@@ -302,6 +314,8 @@ The game left the browser: a 1:1 port of the JavaScript version to C++20 + rayli
 - `maki_bench [ticks] [seed]` runs a headless battle with a bot (drives to the flag along the flow field, shoots the nearest enemy) and reports results, simulation and render cost per section.
 - `maki_snapshot out.png [ticks] [seed]` renders a frame of a bot-played battle to PNG.
 - `maki_gasbench` times the gas solver stages; `maki_mapsum` prints battlefield checksums.
+- `maki_pacing [level] [seeds]` plays one battle per seed with a careful bot and reports outcome and duration; `maki_pacing campaign [seeds]` plays full runs (first reward each time).
+- `maki_snapshot out.png [ticks] [seed] [full | X Y]` can render the whole battlefield or centre on a point.
 - `maki --autotest --size 1600x900` runs the real game with the bot, opens the map, gives orders and saves screenshots.
 - Mechanics are checked with headless scripts (armor/ricochet, crew, emergency, smoke vs line of sight, MG chip, wall collapse, telegraph). These scripts live outside the repo; add them under `tools/tests/` when convenient.
 

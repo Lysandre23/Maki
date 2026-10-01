@@ -157,6 +157,16 @@ uint32_t cellColor(const Grid& grid, int x, int y) {
       bool ring = (d + x + y) % 4 == 0; // straw rolled in a spiral
       return ring ? g(0x6a) : dark ? g(0x8a) : hurt && chk ? g(0x9a) : g(0xd8);
     }
+    case M::SAND: {
+      // stacked bags: staggered rows of 3, rounded with ink seams
+      if (!grid.isSolid(x - 1, y) || !grid.isSolid(x + 1, y) || !grid.isSolid(x, y - 1) || !grid.isSolid(x, y + 1)) return C_BLACK;
+      int row = y / 3, off = (row & 1) * 3;
+      bool seam = y % 3 == 2 || (x + off) % 6 == 5;
+      if (seam) return g(0x3a);
+      if (hurt && chk) return g(0x70);
+      bool lit = y % 3 == 0 && (x + off) % 6 < 3; // top-left of each bag catches the light
+      return dark ? (lit ? g(0x9a) : g(0x7c)) : (lit ? g(0xe2) : g(0xb8));
+    }
     case M::WOOD:
       if (dark) return d == 0 ? g(0x10) : g(0x34);
       return hurt && chk ? g(0x50) : WOOD[d % 3];

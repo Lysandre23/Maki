@@ -16,15 +16,16 @@ enum : uint8_t {
   GRASS = 9,   // tall grass: walkable, crushed by tanks, burns in racing fronts
   HEDGE = 10,  // hedgerows, bushes, tree canopies: solid foliage, flammable
   HAY = 11,    // hay bales: solid, very flammable
+  SAND = 12,   // sandbags: solid, soft, soak up blasts, spill into rubble
 };
 }
 
-inline constexpr uint8_t MAT_HP[12] = {0, 3, 8, 1, 4, 0, 2, 6, 0, 1, 2, 2};
-inline constexpr uint8_t SOLID[12] = {0, 1, 1, 0, 1, 0, 1, 1, 0, 0, 1, 1};
-inline constexpr uint8_t FLAMMABLE[12] = {0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 1};
+inline constexpr uint8_t MAT_HP[13] = {0, 3, 8, 1, 4, 0, 2, 6, 0, 1, 2, 2, 5};
+inline constexpr uint8_t SOLID[13] = {0, 1, 1, 0, 1, 0, 1, 1, 0, 0, 1, 1, 1};
+inline constexpr uint8_t FLAMMABLE[13] = {0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 1, 0};
 
 // Chance that a destroyed cell of this material becomes a flying debris particle.
-inline constexpr float DEBRIS_CHANCE[12] = {0, 0.55f, 0.7f, 0.25f, 0.5f, 0, 0.4f, 0.6f, 0, 0, 0.3f, 0.4f};
+inline constexpr float DEBRIS_CHANCE[13] = {0, 0.55f, 0.7f, 0.25f, 0.5f, 0, 0.4f, 0.6f, 0, 0, 0.3f, 0.4f, 0.2f};
 
 // Floor ids (colored by palette). Tile ids are for indoor biomes.
 namespace F {

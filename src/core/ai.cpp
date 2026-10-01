@@ -10,7 +10,6 @@ static int chargeOf(const std::string& type) {
   if (type == "boss") return 28;
   return 30;
 }
-static constexpr double SIGHT = 460;   // max engagement distance
 static constexpr double LEASH = 240;   // how far a defender strays from its post while fighting
 static constexpr double MOVE_ENGAGE = 200;
 
@@ -52,7 +51,7 @@ static Tank* pickTarget(Tank& t, Game& game) {
   for (Tank* f : foes) {
     if (!f->alive) continue;
     double d = std::hypot(f->x - t.x, f->y - t.y);
-    if (d < SIGHT) cands.push_back({d, f});
+    if (d < t.s.sight) cands.push_back({d, f});
   }
   std::stable_sort(cands.begin(), cands.end(), [](auto& a, auto& b) { return a.first < b.first; });
   for (size_t i = 0; i < std::min<size_t>(3, cands.size()); i++) {
@@ -163,17 +162,19 @@ void updateAI(Tank& t, Game& game) {
   // Firing is telegraphed: the tank "charges" (laser line + muzzle glint,
   // turret nearly locked) before the shell leaves, so the player can dodge.
   if (t.charge > 0) {
-    if (--t.charge == 0 && t.canFire() && !friendlyInLine(t, game, t.ta, std::min(dist, SIGHT))) {
+    if (--t.charge == 0 && t.canFire() && !friendlyInLine(t, game, t.ta, std::min(dist, t.s.sight))) {
       game.fire(t);
       ai.breach = 0;
     }
   } else {
     bool aligned = std::abs(angDiff(aim, t.ta)) < 0.06;
-    bool wantShot = (ai.los && dist < SIGHT && rnd() < 0.05) || ai.breach > 0;
-    if (aligned && t.canFire() && wantShot && !friendlyInLine(t, game, t.ta, std::min(dist, SIGHT))) {
+    bool wantShot = (ai.los && dist < t.s.sight && rnd() < 0.05) || ai.breach > 0;
+    if (aligned && t.canFire() && wantShot && !friendlyInLine(t, game, t.ta, std::min(dist, t.s.sight))) {
       t.charge = t.chargeMax = chargeOf(t.type);
     }
   }
+
+  if (t.s.immobile) return; // towed gun: aims and fires, never drives
 
   if (ai.unstuck > 0) { ai.unstuck--; t.throttle = -0.8; t.turn = ai.unTurn; return; }
 

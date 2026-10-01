@@ -28,6 +28,7 @@ constexpr double RETREAT_HULL = 0.4;
 
 struct Squad {
   int id = 0;
+  int team = 0;            // 0 = ours (tactical map), 1 = enemy (commander)
   std::vector<Tank*> tanks;
   std::string order = "follow";
   Pt goal;
@@ -144,7 +145,7 @@ struct Game {
 
   std::vector<std::unique_ptr<Tank>> battleTanks; // allies + enemies of this battle
   std::vector<Tank*> allies, enemies, friendlies, tanks;
-  std::vector<std::unique_ptr<Squad>> squads;
+  std::vector<std::unique_ptr<Squad>> squads; // ours
   std::vector<Barrel> barrels;
   int emergency = 0, smokeCharges = 0, smokeCd = 0;
   int pickupAcc = 0, rushT = 0;
@@ -184,7 +185,18 @@ struct Game {
   Squad* squad(int id);
   void orderSquad(int id, const std::string& order, bool hasPoint = false, double x = 0, double y = 0);
   void toggleStance(int id);
-  const Known* threatNear(double x, double y) const;
+  // Nearest hostile to a point as seen by `team`: our side uses what the
+  // fog of war knows, the enemy uses the real positions.
+  bool threatNear(double x, double y, int team, Pt& out) const;
+
+  // reinforcement waves + enemy commander (commander.cpp)
+  std::vector<std::unique_ptr<Squad>> enemySquads;
+  int waveNo = 0, waveT = 0, commandT = 0;
+  int waveIn() const; // ticks until the next wave, -1 when waves have stopped
+  void resetWaves();
+  void updateWaves();
+  void spawnWave();
+  void command();
 
   void chooseReward(int i);
   void update(const Input& inp);

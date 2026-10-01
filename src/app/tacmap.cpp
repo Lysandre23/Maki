@@ -28,11 +28,12 @@ static Color tone(uint8_t m) {
     case M::STONE: return {0x4a, 0x4a, 0x4a, 255};
     case M::WRECK: return {0x2a, 0x2a, 0x2a, 255};
     case M::BARREL: return {0x8a, 0x5a, 0x30, 255};
+    case M::SAND: return {0xa8, 0x9a, 0x78, 255};
     default: return {0xdb, 0xd5, 0xc3, 255};
   }
 }
 // what wins a 4x4 block: solids first, so thin hedgerows and walls survive the downscale
-static const uint8_t SOLID_FIRST[7] = {M::STONE, M::BRICK, M::WRECK, M::WOOD, M::BARREL, M::HAY, M::HEDGE};
+static const uint8_t SOLID_FIRST[8] = {M::STONE, M::BRICK, M::WRECK, M::SAND, M::WOOD, M::BARREL, M::HAY, M::HEDGE};
 
 void TacMap::unload() {
   if (hasTex) { UnloadTexture(terrain); UnloadTexture(fog); hasTex = false; }
@@ -66,8 +67,8 @@ void TacMap::buildTerrain(Game& game) {
       for (int y = j * DS; y < j * DS + DS && y < grid.h; y++) {
         for (int x = i * DS; x < i * DS + DS && x < grid.w; x++) {
           uint8_t m = grid.mat[y * grid.w + x];
-          int r = (int)(std::find(SOLID_FIRST, SOLID_FIRST + 7, m) - SOLID_FIRST);
-          if (r < 7 && r < rank) { rank = r; best = m; }
+          int r = (int)(std::find(SOLID_FIRST, SOLID_FIRST + 8, m) - SOLID_FIRST);
+          if (r < 8 && r < rank) { rank = r; best = m; }
           else if (m == M::GRASS) grass++;
           else if (m == M::RUBBLE) rubble++;
         }

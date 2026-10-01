@@ -21,7 +21,7 @@ FetchContent_MakeAvailable(raylib)
 add_library(maki_core STATIC
   src/core/grid.cpp src/core/debris.cpp src/core/fire.cpp src/core/gas.cpp
   src/core/nav.cpp src/core/worldgen.cpp src/core/tank.cpp src/core/ai.cpp
-  src/core/squads.cpp src/core/rewards.cpp src/core/game.cpp
+  src/core/squads.cpp src/core/rewards.cpp src/core/game.cpp src/core/commander.cpp
   src/core/palette.cpp src/core/compose.cpp)
 target_include_directories(maki_core PUBLIC src/core)
 
@@ -48,3 +48,6 @@ target_link_libraries(maki_mapsum PRIVATE maki_core)
 
 add_executable(maki_gasbench tools/gasbench.cpp)
 target_link_libraries(maki_gasbench PRIVATE maki_core)
+
+add_executable(maki_pacing tools/pacing.cpp)
+target_link_libraries(maki_pacing PRIVATE maki_core)
