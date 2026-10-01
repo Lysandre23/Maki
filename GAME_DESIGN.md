@@ -129,7 +129,7 @@ Each battle picks a biome. Materials are simulated like the rest of the world.
 
 | Biome | Features | New materials |
 |---|---|---|
-| **Field** | Open ground, hedgerows, hay bales, farm buildings, craters | **Grass** (flammable, burns in racing fronts), **Hay** |
+| **Field** | Open ground scattered with short hedges and low stone walls, hay bales, ruined farm buildings, craters | **Grass** (flammable, burns in racing fronts), **Hay** |
 | **Forest** | Dense trees (cover, line of sight blockers), clearings, trails | **Tree trunk** (solid wood), **Canopy** (hides units from above, flammable, blocks vision) |
 | **Beach** | Sand, shallow water, dunes, concrete bunkers, beach obstacles | **Sand** (soft, cratered easily), **Water** (slows tanks, fire makes steam), **Concrete** |
 | **Village** | The current building layouts (halls, lanes, courtyard) broken into houses | existing brick and stone |
@@ -177,7 +177,7 @@ Fire stays **natural physics** and is rendered **orange**: explosions and burnin
 - **Field biome** (`generateBattle` in `src/core/worldgen.cpp`):
   - dirt road west to east, plowed fields, soil patches, pebbles;
   - tall **GRASS** meadows: walkable, crushed flat by tanks, flammable, 40% damp (won't catch);
-  - **HEDGE** hedgerows (north-south lines with gaps, plus east-west stubs), copses and lone trees;
+  - **HEDGE** short hedges (see the cover rule below), copses and lone trees;
   - **HAY** bales, 1-2 brick farmhouses, crates, fuel drums, old craters;
   - daylight with halftone cloud shadows.
 - **Materials:** GRASS=9, HEDGE=10, HAY=11 (`src/core/materials.h`). Fire life, spread and heat are set per material in `src/core/fire.cpp`.
@@ -274,7 +274,7 @@ The game left the browser: a 1:1 port of the JavaScript version to C++20 + rayli
 
 #### 13.3.1 B3: what was built (state on 2026-10-01)
 - **SAND** (material 12, `src/core/materials.h`): solid, 5 HP, not flammable. Destroyed sand spills into rubble instead of leaving a hole. A tank with sandbags between it and a blast takes 40% of the splash (`Game::blast`). Drawn as staggered rows of bags.
-- **Dug-in positions** (`dugIn` in `src/core/worldgen.cpp`): U of sandbags (back wall west, open east), the tank sits inside facing west. 4 + level/2 per battle: up to three around the flag (120 cells west of it), the rest beside hedgerow gaps on the enemy side (covering the exit, not in it). Defenders take them first (`placeEnemies`, dug-in candidates score +4).
+- **Dug-in positions** (`dugIn` in `src/core/worldgen.cpp`): U of sandbags (back wall west, open east), the tank sits inside facing west. 4 + level/2 per battle: up to three around the flag (120 cells west of it), the rest on open ground in the enemy half (from 35% of the map width). Defenders take them first (`placeEnemies`, dug-in candidates score +4).
 - **Safety:** every sandbag structure is checked with the nav grid; if it cuts the spawn off from the flag it is removed (`Undo` + `connected`).
 - **Anti-tank gun** (`atgun` in `src/core/tank.cpp`): 22x18, no tracks or engine (`immobile`: never drives, only track/engine-less hit zones, abandoned as soon as the gun is knocked out), long barrel, sight 680, shell 62 dmg. Sandbag crescent in front. 1 + (level >= 3) + (level >= 5) per battle, placed where the line of fire to the west is longest.
 - **Defenders:** 6 + level tanks (was 5 + level), placed from 32% of the map width (was 42%), so the front starts earlier.
@@ -283,6 +283,14 @@ The game left the browser: a 1:1 port of the JavaScript version to C++20 + rayli
 - **Pacing:** speeds x0.85 and reloads x1.2 for every tank type (`PACE_SPEED`, `PACE_RELOAD`); AI sight 560 (was 460) per type (`TankStats::sight`); flag capture 30 s alone (was 8 s); a contested flag now slowly goes back to the defenders.
 - **Economy:** between battles parts are patched +40% (was +20%), wrecked parts come back at 40% (was 30%), +20 spares.
 - **Measured** with `maki_pacing` (careful bot: stops to fight what it sees, repairs, smokes, shoots through obstacles when stuck): battle 1 captured in ~2 min (6-8 of 8), most runs end in battle 2-3. The bot aims perfectly but has no tactics (no cover, no squad orders, no scrap pickup), so real battles should run longer; the 5-minute target needs a human playtest. Tuning knobs: `CAPTURE_TICKS` (game.cpp), `WAVE_TICKS`, `FIRST_WAVE_TICKS`, `MAX_ALIVE` (commander.cpp), roster size (worldgen.cpp), `PACE_*` (tank.cpp).
+
+#### 13.3.2 Map layout: no long walls (2026-10-01)
+Playtest feedback: the hedgerow lines (full-height walls with two or three gaps) funnelled every fight through a few passages. They are gone. The rule now is **only short cover, long enough to hide a tank behind, never long enough to wall off a route**:
+- ~100 pieces scattered over the map (`--- cover` in `generateBattle`), at least ~115 cells apart, 50-90 cells long, kept off the road.
+- 65% hedges (wobbly, 10-14 thick, destructible foliage), 35% low stone field walls (straight, 11 thick, masonry: sturdier, can collapse).
+- Shapes: 55% north-south (facing the attacker), 20% diagonal, 13% east-west, 12% L-shaped (north-south with a stub off the south end, going east).
+- Farmhouses are ruins: each wall is broken into 30-65 cell pieces with 36-52 cell gaps.
+- Measured with `maki_pacing` (careful bot): battle 1 captured 10/10 in ~2 min, full runs reach battle 2-4 (the open maps favour the attacker a little more than the hedgerows did).
 
 ### 13.4 B4: Full run and cards v2
 1. **Run:** 7 battles (6 + final assault with the boss tank and stronger defenses). Rewards after each won battle; defeat when the player's tank dies.

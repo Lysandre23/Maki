@@ -98,18 +98,23 @@ void bakeDaylight(Grid& g, int seed) {
   }
 }
 
-// Farmhouse: brick walls with a doorway on each long side.
+// Ruined farmhouse: brick walls broken into short pieces with wide gaps,
+// so it is cover and a place to fight in, never a fortress with one door.
 void farmhouse(Grid& g, int x, int y, int w, int h, Rng& rng, const AvoidFn& avoid) {
-  SID++;
   const int T = 8;
-  int d1 = x + 12 + (int)std::floor(rng() * (w - 60));
-  int d2 = x + 12 + (int)std::floor(rng() * (w - 60));
-  for (int xx = x; xx < x + w; xx++) {
-    if (xx < d1 || xx >= d1 + 34) fillRect(g, xx, y, 1, T, brickCell, &avoid);
-    if (xx < d2 || xx >= d2 + 34) fillRect(g, xx, y + h - T, 1, T, brickCell, &avoid);
-  }
-  fillRect(g, x, y, T, h, brickCell, &avoid);
-  fillRect(g, x + w - T, y, T, h, brickCell, &avoid);
+  auto side = [&](int len, auto&& put) {
+    for (int pos = 0; pos < len;) {
+      int piece = 30 + (int)std::floor(rng() * 35);
+      int gap = 36 + (int)std::floor(rng() * 16);
+      SID++;
+      for (int k = pos; k < std::min(len, pos + piece); k++) put(k);
+      pos += piece + gap;
+    }
+  };
+  side(w, [&](int k) { fillRect(g, x + k, y, 1, T, brickCell, &avoid); });
+  side(w, [&](int k) { fillRect(g, x + w - 1 - k, y + h - T, 1, T, brickCell, &avoid); });
+  side(h, [&](int k) { fillRect(g, x, y + h - 1 - k, T, 1, brickCell, &avoid); });
+  side(h, [&](int k) { fillRect(g, x + w - T, y + k, T, 1, brickCell, &avoid); });
 }
 
 std::vector<std::string> roster(int level, Rng& rng) {
@@ -303,46 +308,7 @@ Layout generateBattle(Grid& g, Rng& rng, int level) {
   fillRect(g, 0, 0, BORDER, H, stoneCell);
   fillRect(g, W - BORDER, 0, BORDER, H, stoneCell);
 
-  // --- bocage: north-south hedgerows with gaps, plus east-west stubs
   auto onRoad = [&](double x, double y) { return std::abs(y - roadY(x)) < 16; };
-  std::vector<int> cols;
-  std::vector<Pt> choke; // hedgerow gaps on the enemy side: dug-in candidates
-  for (int cx = 460; cx < W - 360; cx += 380 + (int)std::floor(rng() * 120)) cols.push_back(cx);
-  for (int x0 : cols) {
-    std::vector<std::pair<int, int>> gaps;
-    int n = 2 + (rng() < 0.5 ? 1 : 0);
-    for (int k = 0; k < n; k++) {
-      int gy = 40 + (int)std::floor(rng() * (H - 160));
-      int ge = gy + 70 + (int)std::floor(rng() * 40);
-      gaps.push_back({gy, ge});
-      // a dug-in covers the gap from beside its exit, not in front of it
-      double side = rng() < 0.5 ? -1 : 1;
-      if (x0 > W * 0.3) choke.push_back({x0 + 70.0, (gy + ge) / 2.0 + side * ((ge - gy) / 2.0 + 40)});
-    }
-    double ph = rng() * 6;
-    for (int y = BORDER; y < H - BORDER; y++) {
-      bool inGap = false;
-      for (auto& gp : gaps) if (y >= gp.first && y < gp.second) { inGap = true; break; }
-      if (inGap) continue;
-      double cx = x0 + std::sin(y * 0.021 + ph) * 9;
-      int ht = 5 + (int)(hash(x0, y >> 3) % 4);
-      for (int x = (int)std::floor(cx - ht); x <= cx + ht; x++) {
-        if (!onRoad(x, y) && !avoid(x, y)) hedgeCell(g, x, y);
-      }
-    }
-  }
-  for (size_t k = 0; k < cols.size() * 2; k++) {
-    int i = (int)std::floor(rng() * (cols.size() + 1));
-    int xa = i == 0 ? 220 : cols[i - 1] + 10, xb = i == (int)cols.size() ? W - 260 : cols[i] - 10;
-    int y0 = 60 + (int)std::floor(rng() * (H - 120));
-    int len = std::min(xb - xa, 120 + (int)std::floor(rng() * 200));
-    int xs = xa + (int)std::floor(rng() * std::max(1, xb - xa - len));
-    double ph = rng() * 6;
-    for (int x = xs; x < xs + len; x++) {
-      double cy = y0 + std::sin(x * 0.03 + ph) * 6;
-      for (int y = (int)std::floor(cy - 5); y <= cy + 5; y++) if (!onRoad(x, y) && !avoid(x, y)) hedgeCell(g, x, y);
-    }
-  }
 
   // --- copses and lone trees (crowns = foliage discs)
   int nCopses = 5 + (int)std::floor(rng() * 4);
@@ -380,6 +346,59 @@ Layout generateBattle(Grid& g, Rng& rng, int level) {
     }
     farmhouse(g, x, y, w, h, rng, avoid);
     farms.push_back({x, y, w, h});
+  }
+
+  // --- cover: short hedges and low stone walls everywhere, each long enough
+  // to hide a tank behind, none long enough to wall off a route. Mostly
+  // north-south (facing the attacker), some diagonal, east-west or L-shaped.
+  {
+    std::vector<Pt> placed;
+    for (int tries = 0; tries < 5000 && placed.size() < 110; tries++) {
+      double cx = 230 + rng() * (W - 330);
+      double cy = 40 + rng() * (H - 80);
+      double len = 50 + rng() * 40;
+      double shape = rng();
+      double ang = shape < 0.55 ? (rng() - 0.5) * 0.4                               // north-south
+                 : shape < 0.75 ? (rng() < 0.5 ? -1 : 1) * (0.45 + rng() * 0.35)    // diagonal
+                 : shape < 0.88 ? kPI / 2 + (rng() - 0.5) * 0.3                      // east-west
+                 : (rng() - 0.5) * 0.2;                                              // L: north-south + stub
+      bool corner = shape >= 0.88;
+      bool stone = rng() < 0.35;
+      double ph = rng() * 6;
+      bool near = false;
+      for (const Pt& p : placed) if (std::hypot(p.x - cx, p.y - cy) < 115) { near = true; break; }
+      if (near || avoid(cx, cy)) continue;
+      // the stroke: centre line points, plus the L stub off the south end, going east
+      double dx = std::sin(ang), dy = std::cos(ang);
+      std::vector<Pt> line;
+      for (double t = -len / 2; t <= len / 2; t += 1) line.push_back({cx + dx * t, cy + dy * t});
+      if (corner) {
+        Pt e = line.back();
+        double stub = 26 + rng() * 14;
+        for (double t = 1; t <= stub; t += 1) line.push_back({e.x + t, e.y});
+      }
+      bool clear = true;
+      for (size_t i = 0; i < line.size() && clear; i += 4) {
+        const Pt& p = line[i];
+        if (onRoad(p.x, p.y) || std::abs(p.y - roadY(p.x)) < 30 || avoid(p.x, p.y) || !areaFree(g, (int)p.x - 14, (int)p.y - 14, 28, 28)) clear = false;
+      }
+      if (!clear) continue;
+      if (stone) SID++;
+      for (size_t i = 0; i < line.size(); i++) {
+        // hedges wobble and vary in thickness, field walls are straight and thin
+        double t = (double)i;
+        double wob = stone ? 0 : std::sin(t * 0.09 + ph) * 2.5;
+        double px = line[i].x + (-dy) * wob * (i < (size_t)len + 1 ? 1 : 0), py = line[i].y + dx * wob * (i < (size_t)len + 1 ? 1 : 0);
+        double ht = stone ? 5.5 : 5 + (hash((int)cx, (int)(t / 8)) % 3);
+        for (int yy = (int)std::floor(py - ht); yy <= py + ht; yy++)
+          for (int xx = (int)std::floor(px - ht); xx <= px + ht; xx++) {
+            if (!g.inBounds(xx, yy) || sq(xx + 0.5 - px) + sq(yy + 0.5 - py) > ht * ht) continue;
+            if (stone) { uint8_t m = g.mat[yy * W + xx]; if (m == M::EMPTY || m == M::GRASS) stoneCell(g, xx, yy); }
+            else hedgeCell(g, xx, yy);
+          }
+      }
+      placed.push_back({cx, cy});
+    }
   }
 
   // --- hay bales and crates around farms / in fields
@@ -440,8 +459,8 @@ Layout generateBattle(Grid& g, Rng& rng, int level) {
   // hp for everything written directly
   for (size_t i = 0; i < g.mat.size(); i++) if (g.mat[i] == M::GRASS) g.hp[i] = 1;
 
-  // --- defenses: dug-in positions around the flag first, then at random
-  // hedgerow gaps on the enemy side
+  // --- defenses: dug-in positions around the flag first, then on open ground
+  // in the enemy half (the open stretches are where the front needs them)
   std::vector<Pt> dug;
   int nDug = 4 + level / 2;
   auto tryDug = [&](Pt p) {
@@ -454,10 +473,10 @@ Layout generateBattle(Grid& g, Rng& rng, int level) {
     dug.push_back({(double)cx, (double)cy});
   };
   for (double a : {-0.8, 0.0, 0.8}) tryDug({flag.x + std::cos(kPI + a) * 120, flag.y + std::sin(kPI + a) * 120});
-  for (size_t k = 0; k < choke.size(); k++) {
-    size_t j = k + (size_t)std::floor(rng() * (choke.size() - k));
-    std::swap(choke[k], choke[j]);
-    tryDug(choke[k]);
+  for (int k = 0; k < 80 && (int)dug.size() < nDug; k++) {
+    double x = W * 0.35 + rng() * (W * 0.6 - 100);
+    double y = 60 + rng() * (H - 120);
+    tryDug({x, y});
   }
 
   auto types = roster(level, rng);
