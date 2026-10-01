@@ -3,23 +3,27 @@ import { clamp } from '../util/math.js';
 import { rnd } from '../util/rng.js';
 import { Composer } from './compose.js';
 import { PART_LABEL as ZONE_LABEL } from '../game/game.js';
+import { alive, centroid } from '../game/squads.js';
 
 // Browser presentation: pixel frame on a low-res canvas (CSS upscaled,
 // pixelated), plus a full-resolution canvas on top for crisp comic text.
 export class Renderer {
   constructor(canvas, fx, game) {
-    canvas.width = VIEW_W;
-    canvas.height = VIEW_H;
+    this.canvas = canvas;
     this.ctx = canvas.getContext('2d', { alpha: false });
-    this.img = this.ctx.createImageData(VIEW_W, VIEW_H);
-    this.frame = new Uint32Array(this.img.data.buffer);
     this.fx = fx;
     this.fctx = fx.getContext('2d');
     this.scale = 1;
+    this.showOrders = true; // faint squad order arrows in-game (O)
     this.composer = new Composer(game.grid);
   }
 
+  // Call after setView(): reallocates the pixel frame to the new view size.
   resize(devicePxPerCell) {
+    this.canvas.width = VIEW_W;
+    this.canvas.height = VIEW_H;
+    this.img = this.ctx.createImageData(VIEW_W, VIEW_H);
+    this.frame = new Uint32Array(this.img.data.buffer);
     this.scale = devicePxPerCell;
     this.fx.width = VIEW_W * devicePxPerCell;
     this.fx.height = VIEW_H * devicePxPerCell;
@@ -37,6 +41,7 @@ export class Renderer {
     f.clearRect(0, 0, this.fx.width, this.fx.height);
     f.setTransform(this.scale, 0, 0, this.scale, 0, 0);
     if (game.flag) this.drawCaptureZone(f, game.flag, camX, camY, game.tick);
+    if (this.showOrders) this.drawOrders(f, game, camX, camY);
     for (const t of game.enemies) if (t.alive && t.charge > 0) this.drawTelegraph(f, t, game, camX, camY);
     for (const p of game.popups) this.drawPopup(f, p, camX, camY);
     this.drawOffscreen(f, game, camX, camY);
@@ -61,6 +66,30 @@ export class Renderer {
       f.lineWidth = 2.2;
       f.strokeStyle = '#3c8cff';
       f.beginPath(); f.arc(x, y, flag.r, -Math.PI / 2, -Math.PI / 2 + flag.progress * Math.PI * 2); f.stroke();
+    }
+    f.restore();
+  }
+
+  // Faint blue arrow from each squad to its order point, numbered.
+  drawOrders(f, game, camX, camY) {
+    f.save();
+    f.strokeStyle = f.fillStyle = '#3c8cff';
+    f.globalAlpha = 0.45;
+    f.lineWidth = 0.8;
+    f.font = '8px Bangers, Impact, sans-serif'; f.textAlign = 'center'; f.textBaseline = 'middle';
+    for (const q of game.squads || []) {
+      const live = alive(q);
+      if (!q.goal || !live.length) continue;
+      const c = centroid(live), gx = q.goal.x - camX, gy = q.goal.y - camY, sx = c.x - camX, sy = c.y - camY;
+      const d = Math.hypot(gx - sx, gy - sy);
+      if (d < 30) continue;
+      const a = Math.atan2(gy - sy, gx - sx);
+      f.setLineDash([4, 3]);
+      f.beginPath(); f.moveTo(sx + Math.cos(a) * 16, sy + Math.sin(a) * 16); f.lineTo(gx, gy); f.stroke();
+      f.setLineDash([]);
+      f.beginPath(); f.moveTo(gx, gy); f.lineTo(gx - Math.cos(a - 0.5) * 6, gy - Math.sin(a - 0.5) * 6);
+      f.lineTo(gx - Math.cos(a + 0.5) * 6, gy - Math.sin(a + 0.5) * 6); f.closePath(); f.fill();
+      f.fillText(String(q.id + 1), gx + Math.cos(a) * 8, gy + Math.sin(a) * 8);
     }
     f.restore();
   }

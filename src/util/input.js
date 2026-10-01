@@ -6,6 +6,7 @@ export const input = {
   mx: VIEW_W / 2,     // mouse, in view cells
   my: VIEW_H / 2,
   down: [false, false, false],
+  clicks: [],         // mouse presses since last tick: { b, shift, ctrl }
 };
 
 const BLOCK = new Set([' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'f3', 'tab']);
@@ -26,7 +27,11 @@ export function initInput(el) {
     input.my = ((e.clientY - r.top) * VIEW_H) / r.height;
   };
   window.addEventListener('mousemove', pos);
-  el.addEventListener('mousedown', (e) => { pos(e); input.down[e.button] = true; });
+  el.addEventListener('mousedown', (e) => {
+    pos(e);
+    input.down[e.button] = true;
+    input.clicks.push({ b: e.button, shift: e.shiftKey, ctrl: e.ctrlKey });
+  });
   window.addEventListener('mouseup', (e) => { input.down[e.button] = false; });
   el.addEventListener('contextmenu', (e) => e.preventDefault());
 }

@@ -1,17 +1,21 @@
-import { VIEW_W, VIEW_H, TICK, BATTLES } from './config.js';
+import { VIEW_MAX_W, VIEW_MAX_H, TICK, BATTLES, setView } from './config.js';
 import { Game, POWER } from './game/game.js';
 import { CARDS } from './game/rewards.js';
 import { PARTS } from './entities/tank.js';
 import { Renderer } from './render/renderer.js';
+import { TacMap } from './render/tacmap.js';
+import { alive as aliveIn } from './game/squads.js';
 import { Perf } from './util/perf.js';
 import { input, initInput } from './util/input.js';
 
 const $ = (id) => document.getElementById(id);
 const stage = $('stage'), canvas = $('game'), fxCanvas = $('fx');
-const topHud = $('top'), perfHud = $('perf'), partsHud = $('parts'), overlay = $('overlay');
+const topHud = $('top'), perfHud = $('perf'), partsHud = $('parts'), overlay = $('overlay'), squadHud = $('squads');
 
 const game = new Game((Math.random() * 1e9) | 0);
 const renderer = new Renderer(canvas, fxCanvas, game);
+const tac = new TacMap($('tac'));
+window.maki = { game, tac }; // console access for debugging
 const perf = new Perf();
 initInput(stage);
 
@@ -20,12 +24,20 @@ let showPerf = true;
 
 // Integer scale in *device* pixels (Windows display scaling gives devicePixelRatio
 // 1.25, 1.5...), otherwise cells get uneven sizes and dithering breaks up.
+// The view size then follows the window so the game fills it: about 400 rows
+// tall, capped so the view stays inside the gas window. The stage may overhang
+// the window by less than one cell; #wrap centres and clips it.
 function resize() {
   const dpr = window.devicePixelRatio || 1;
-  const s = Math.max(1, Math.floor(Math.min((innerWidth * dpr) / VIEW_W, (innerHeight * dpr) / VIEW_H)));
-  stage.style.width = (VIEW_W * s) / dpr + 'px';
-  stage.style.height = (VIEW_H * s) / dpr + 'px';
+  const dw = innerWidth * dpr, dh = innerHeight * dpr;
+  let s = Math.max(1, Math.round(dh / 400));
+  while (Math.ceil(dw / s) > VIEW_MAX_W || Math.ceil(dh / s) > VIEW_MAX_H) s++;
+  const w = Math.ceil(dw / s), h = Math.ceil(dh / s);
+  setView(w, h);
+  stage.style.width = (w * s) / dpr + 'px';
+  stage.style.height = (h * s) / dpr + 'px';
   renderer.resize(s);
+  tac.resize(w * s, h * s, s);
 }
 addEventListener('resize', resize);
 resize();
@@ -90,6 +102,11 @@ function updateHud() {
   const f = game.flag;
   const flagTxt = f.contested ? 'CONTESTED!' : `${Math.round(f.progress * 100)}%`;
   topHud.textContent = `BATTLE ${game.level} / ${BATTLES}    ALLIES : ${allies}    ENEMIES : ${alive}    KILLS : ${game.kills}    FLAG : ${flagTxt}`;
+  squadHud.innerHTML = game.squads.map((q) => {
+    const pips = q.tanks.map((t) => `<i class="pip${!t.alive ? ' dead' : t.frac('hull') < 0.4 ? ' low' : ''}"></i>`).join('');
+    const order = aliveIn(q).length ? q.order.toUpperCase() + (q.stance === 'cautious' ? ' · CAUTIOUS' : '') : 'WIPED OUT';
+    return `<div><span class="n">${q.id + 1}</span><span>${pips}</span><span class="o">${order}</span></div>`;
+  }).join('');
   for (const k of PARTS) {
     const f = game.player.frac(k);
     const row = partRows[k];
@@ -116,7 +133,18 @@ function updateHud() {
 
 function tick() {
   const k = input.keys;
+  // Tactical map: freezes the battle and takes over the keyboard and mouse.
+  const mapKey = input.pressed.has('tab') || input.pressed.has('m');
+  const closing = tac.open && (mapKey || input.pressed.has('escape') || game.state !== 'play');
+  if (closing || (!tac.open && mapKey && game.state === 'play' && !paused)) tac.toggle(game);
+  if (tac.open || closing) {
+    if (tac.open) tac.handleInput(game, input);
+    input.pressed.clear();
+    input.clicks.length = 0;
+    return;
+  }
   if (input.pressed.has('p') || input.pressed.has('escape')) paused = !paused;
+  if (input.pressed.has('o')) renderer.showOrders = !renderer.showOrders;
   if (input.pressed.has('f3')) showPerf = !showPerf;
   if (input.pressed.has('r') && (game.state === 'dead' || game.state === 'win')) game.newRun();
   if (game.state === 'reward') {
@@ -128,6 +156,7 @@ function tick() {
     if (input.pressed.has(' ')) game.throwSmoke();
   }
   input.pressed.clear();
+  input.clicks.length = 0;
   if (paused) return;
 
   const has = (...ks) => ks.some((x) => k.has(x));
@@ -157,6 +186,7 @@ function frame(now) {
   const u1 = performance.now();
 
   renderer.draw(game, { x: input.mx, y: input.my });
+  if (tac.open) tac.draw(game);
   const r1 = performance.now();
   perf.record(dtMs, u1 - u0, r1 - u1);
 

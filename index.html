@@ -16,11 +16,19 @@
   #stage canvas { position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: block; }
   #game { image-rendering: pixelated; image-rendering: crisp-edges; }
   #fx { pointer-events: none; }
+  #tac { display: none; z-index: 5; } /* tactical map, above the HUD */
   #stage, #stage canvas { cursor: none; }
 
   .hud { position: absolute; pointer-events: none; letter-spacing: 1px;
     color: var(--hud); text-shadow: 2px 2px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000; }
   #top { left: 14px; top: 10px; font-size: 26px; }
+  #squads { left: 14px; top: 42px; font-size: 15px; line-height: 1.25; }
+  #squads div { display: flex; gap: 6px; align-items: center; }
+  #squads .n { width: 15px; text-align: center; background: var(--ally); color: #fff; text-shadow: none; }
+  #squads .pip { display: inline-block; width: 8px; height: 8px; border: 1px solid #000; background: var(--ally); margin-right: 2px; }
+  #squads .pip.low { background: var(--fire); }
+  #squads .pip.dead { background: #333; }
+  #squads .o { color: #fff; }
   #perf { right: 12px; top: 10px; font: 12px/1.3 monospace; color: #ddd; text-shadow: 1px 1px 0 #000;
     white-space: pre; text-align: right; background: rgba(0,0,0,0.65); padding: 3px 6px; }
   #perf:empty { display: none; }
@@ -89,10 +97,12 @@
   <div id="stage">
     <canvas id="game"></canvas>
     <canvas id="fx"></canvas>
+    <canvas id="tac"></canvas>
     <div id="top" class="hud"></div>
+    <div id="squads" class="hud"></div>
     <div id="perf" class="hud"></div>
     <div id="parts" class="hud"></div>
-    <div id="help" class="hud">LMB CANNON · RMB MACHINE GUN · SPACE SMOKE<br>1-7 SEND MECHANIC · E EMERGENCY PATCH · C POWER MODE · TAKE THE FLAG</div>
+    <div id="help" class="hud">LMB CANNON · RMB MACHINE GUN · SPACE SMOKE<br>1-7 SEND MECHANIC · E EMERGENCY PATCH · C POWER MODE<br>TAB TACTICAL MAP · O SHOW ORDERS · TAKE THE FLAG</div>
     <div id="overlay"></div>
   </div>
 </div>

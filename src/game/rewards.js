@@ -16,7 +16,7 @@ export function defaultMods() {
 }
 
 const boost = (t, k, n) => { const p = t.parts[k]; p.max += n; p.hp = p.max; };
-const recruit = (type) => (t, g) => { g.roster.push({ type, hp: null }); };
+const recruit = (type) => (t, g) => { g.addRecruit(type); };
 
 export const CARDS = [
   // ------------------------------------------------------------- player tank

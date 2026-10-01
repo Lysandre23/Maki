@@ -1,7 +1,13 @@
 // Global constants. Everything is in "cells" (1 cell = 1 internal pixel).
 
-export const VIEW_W = 640;
-export const VIEW_H = 360;
+// View size in cells. Live bindings: main.js picks them from the window size
+// (integer pixel scale, no black bars), so never cache them at module load.
+export let VIEW_W = 640;
+export let VIEW_H = 360;
+// The view must stay inside the gas window (GAS_WIN_*) with some slack.
+export const VIEW_MAX_W = 896;
+export const VIEW_MAX_H = 544;
+export function setView(w, h) { VIEW_W = w; VIEW_H = h; }
 
 export const CHUNK_SHIFT = 6;
 export const CHUNK = 1 << CHUNK_SHIFT; // 64x64 cells per chunk

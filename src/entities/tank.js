@@ -54,6 +54,7 @@ export class Tank {
     this.alive = true; this.cookoff = false;
     this.burning = 0;
     this.flashT = 0; this.flashZone = null; this.hitT = 0;
+    this.hurtT = 0;   // counts down after real damage (AI: "under fire")
     this.treadL = 0; this.treadR = 0;
     this.turretLock = 0; this.drag = 1;
     this.power = { move: 1, turret: 1, reload: 1 }; // engine power split (player modes)
@@ -144,6 +145,7 @@ export class Tank {
     if (this.overheat && this.mgHeat < 10) this.overheat = false;
     if (this.flashT > 0) this.flashT--;
     if (this.hitT > 0) this.hitT--;
+    if (this.hurtT > 0) this.hurtT--;
     if (this.burning > 0) {
       this.burning--;
       this.parts.hull.hp -= this.team === 0 ? 0.12 * (this.mods.fireDmg ?? 1) * this.dmgTaken : 0.45;
@@ -276,6 +278,7 @@ export class Tank {
     const p = this.parts[name];
     if (p.hp <= 0 || amount <= 0) return false;
     p.hp -= amount * this.dmgTaken;
+    this.hurtT = 180;
     if (p.hp > 0) return false;
     p.hp = 0;
     this.events.push(name);

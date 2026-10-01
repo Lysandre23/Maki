@@ -158,8 +158,8 @@ Fire stays **natural physics** and is rendered **orange**: explosions and burnin
 | # | Goal | Status |
 |---|---|---|
 | **B1** | Elements removed, new color rule, wide Field battlefield, allies, flag capture | **Done** (2026-10-01) |
-| B2 | Tactical map: pause, schematic view, squads, orders, stances, fog of war | Next |
-| B3 | Enemy defenses, reinforcement waves, commander AI, 5-minute pacing | |
+| **B2** | Tactical map: pause, schematic view, squads, orders, stances, fog of war | **Done** (2026-10-01) |
+| B3 | Enemy defenses, reinforcement waves, commander AI, 5-minute pacing | Next |
 | B4 | Cards v2, 7-battle run, roster persistence | |
 | B5 | Biomes: Forest, Beach, Village | |
 | B6 | Polish: sound, readability, balance, stutters | |
@@ -205,7 +205,7 @@ Fire stays **natural physics** and is rendered **orange**: explosions and burnin
 - **Cards** (`src/game/rewards.js`): 17 for your tank (yellow band) and 7 team cards (blue band), including new scout, gunner and heavy.
 - **Measured (bot, headless):** ~2.4 ms simulation per tick, ~0.6 ms per frame. Battle generation takes ~0.5-0.8 s, the first frame up to ~35 ms. The bot wins in ~50 s, which is too fast; B3 fixes the pacing.
 
-### 13.2 B2: Tactical map (next)
+### 13.2 B2: Tactical map (done, see 13.2.1 for what was built)
 **Goal:** pause, read the whole battlefield, give squads orders, resume.
 
 1. **Squads**
@@ -234,6 +234,16 @@ Fire stays **natural physics** and is rendered **orange**: explosions and burnin
    - Optionally, the current orders are drawn faintly in-game as blue arrows (toggle with O).
 5. **HUD:** a small squad panel (squad number, tanks alive, order) under the top bar.
 6. **Done when:** sending a squad around a hedgerow to flank visibly changes the fight; Hold squads defend a point; Cautious squads retreat.
+
+#### 13.2.1 B2: what was built (state on 2026-10-01)
+- **View size:** the camera is no longer fixed at 640x360. `main.js` picks an integer pixel scale (about 400 rows tall) and sizes the view to fill the window (`setView`, live `VIEW_W`/`VIEW_H` bindings in `src/config.js`), capped at 896x544 so it stays inside the gas window. Composition at the cap costs ~0.7 ms.
+- **Squads** (`src/game/squads.js`): `{ id, tanks, order, goal, heading, stance, orderT }`. Roster entries keep a `squad` id; recruits join the smallest squad with fewer than 3 tanks, else open a new one (4 max). Stances persist per squad id across battles (`game.stances`).
+- **Orders:** `planSquad` gives each member an `ai.dest` (rows of two facing the order heading, snapped to passable nav nodes). Hold scores nav nodes within 60 cells for a solid 14-46 cells toward the nearest *known* enemy and re-plans every 2 s. The AI's `orderGoal` returns `passive` (Move) and `chase` flags instead of switching on the order name.
+- **Cautious:** below 40% hull a tank falls back to 70 cells behind the player (`ai.retreat`). Renewing the order releases it and exempts it from retreating again under that order (`ai.exempt`). "Under fire" uses `tank.hurtT` (set on real part damage).
+- **Fog of war** (`src/game/vision.js`): 16-cell nodes, 120 rays of 360 cells per friendly every 10 ticks (staggered), stopped by solids and thick smoke. `vision.known` holds seen enemies and last-seen ghosts (20 s). Cost ~0.2 ms per tick.
+- **Tactical map** (`src/render/tacmap.js`, `#tac` canvas): built on open (sim frozen), 4 cells per schematic pixel with solids winning, fires baked in orange, fog veil (explored vs never seen). Squads drawn as blue tags with order, stance and mean hull; paths sampled from the flow field. Controls in the README. In-game, faint numbered arrows show squad orders (O toggles).
+- **HUD:** squad panel under the top bar (pips per tank, order, stance).
+- **Debug:** `window.maki = { game, tac }` in the browser console.
 
 ### 13.3 B3: Enemy and pacing
 1. **Defenses** (worldgen):

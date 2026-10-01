@@ -14,6 +14,8 @@ import { Projectiles } from '../entities/projectiles.js';
 import { initAI, updateAI } from '../entities/ai.js';
 import { findCollapses } from '../world/collapse.js';
 import { pickRewards, defaultMods } from './rewards.js';
+import { Vision } from './vision.js';
+import { makeSquad, squadForRecruit, orderSquad, toggleStance, updateSquads } from './squads.js';
 
 const BREAK_TEXT = { trackL: 'SNAP!', trackR: 'SNAP!', cannon: 'CRUNCH!', turret: 'JAMMED!', engine: 'FWOOSH!' };
 
@@ -53,6 +55,7 @@ export class Game {
     this.gas = new Gas(ROOM_W, ROOM_H, GAS_SCALE, GAS_WIN_W, GAS_WIN_H);
     this.flames = new Fire();
     this.nav = new Nav(this.grid, 12);
+    this.vision = new Vision(ROOM_W, ROOM_H); // our team's fog of war
     this.projectiles = new Projectiles();
     this.flashes = [];
     this.popups = [];
@@ -77,7 +80,10 @@ export class Game {
     this.tagCount = {};  // tag -> number of owned cards carrying it
     this.player = new Tank('player', 0, 0, 0, 0);
     this.player.mods = defaultMods();
-    this.roster = START_ROSTER.map((type) => ({ type, hp: null })); // allies carried between battles
+    // allies carried between battles; two squads of two to start
+    this.roster = START_ROSTER.map((type, i) => ({ type, hp: null, squad: i >> 1 }));
+    this.stances = {};         // squad id -> stance, kept across battles
+    this.orderSeq = 0;
     this.spares = 40;          // consumed by the crew when repairing
     this.crew = [null, null];  // part each mechanic is working on
     this.crewNext = 0;
@@ -98,6 +104,7 @@ export class Game {
     this.popups.length = 0;
     this.scrap.length = 0;
     this.smokeClouds.length = 0;
+    this.vision.clear();
     this.barrels = layout.barrels;
     this.biome = layout.biome;
     const m = this.player.mods;
@@ -127,6 +134,15 @@ export class Game {
       t.ai.wake = 20;
       return t;
     });
+    // squads from the roster's squad ids, all following the player at first
+    const byId = new Map();
+    for (const t of this.allies) {
+      const id = t.rosterRef.squad ?? 0;
+      if (!byId.has(id)) byId.set(id, makeSquad(id, this.stances[id]));
+      t.squad = byId.get(id);
+      t.squad.tanks.push(t);
+    }
+    this.squads = [...byId.values()].sort((a, b) => a.id - b.id);
     this.enemies = layout.enemies.map((e, i) => {
       const t = new Tank(e.type, e.x, e.y, e.a, 1);
       t.ta = e.a;
@@ -484,8 +500,38 @@ export class Game {
     this.roster = this.allies.filter((t) => t.alive).map((t) => {
       const hp = {};
       for (const k of PARTS) hp[k] = t.parts[k].hp;
-      return { type: t.type, hp };
+      return { type: t.type, hp, squad: t.squad.id };
     });
+  }
+
+  addRecruit(type) {
+    this.roster.push({ type, hp: null, squad: squadForRecruit(this.roster) });
+  }
+
+  // ---------------------------------------------------------------- squads
+
+  squad(id) { return this.squads.find((q) => q.id === id) || null; }
+
+  orderSquad(id, order, x, y) {
+    const sq = this.squad(id);
+    if (sq) orderSquad(this, sq, order, x, y);
+  }
+
+  toggleStance(id) {
+    const sq = this.squad(id);
+    if (!sq) return;
+    toggleStance(sq);
+    this.stances[id] = sq.stance;
+  }
+
+  // Nearest enemy we know about (seen or remembered) to a point, for cover planning.
+  threatNear(x, y) {
+    let best = null, bd = Infinity;
+    for (const k of this.vision.known.values()) {
+      const d = (k.x - x) ** 2 + (k.y - y) ** 2;
+      if (d < bd) { bd = d; best = k; }
+    }
+    return best;
   }
 
   chooseReward(i) {
@@ -530,6 +576,10 @@ export class Game {
     } else { p.throttle = 0; p.turn = 0; }
     if (this.smokeCd > 0) this.smokeCd--;
 
+    if (playing) {
+      this.vision.update(this, this.friendlies, this.enemies);
+      updateSquads(this);
+    }
     for (const t of this.tanks) {
       if (!t.alive || t.isPlayer) continue;
       if (playing) updateAI(t, this);

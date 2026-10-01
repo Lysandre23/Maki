@@ -5,11 +5,14 @@ import { rnd } from '../util/rng.js';
 const CHARGE = { scout: 22, gunner: 32, heavy: 42, boss: 28 };
 const SIGHT = 460;   // max engagement distance
 const LEASH = 240;   // how far a defender strays from its post while fighting
+const MOVE_ENGAGE = 200;
 
 // Orders (set by the game now, by the tactical map later):
 //   follow: keep a formation slot around the player's tank
 //   hold:   stay near `post`, fight whatever comes in range
 //   attack: push to `goal`, fighting on the way
+//   move:   go to `goal`, only fight when hit or a foe is within MOVE_ENGAGE
+// Allies get theirs from their squad (game/squads.js).
 export function initAI(t, idx, order = 'hold') {
   t.ai = {
     phase: idx * 5,
@@ -21,6 +24,9 @@ export function initAI(t, idx, order = 'hold') {
     los: false,
     lastSeen: null,
     lastSeenT: 0,
+    dest: null,           // squad-planned destination (allies)
+    retreat: false,       // cautious stance, falling back to the player
+    exempt: 0,            // squad order under which it already fell back
     strafe: rnd() < 0.5 ? 1 : -1,
     strafeT: 60 + rnd() * 120,
     stuck: 0,
@@ -95,16 +101,27 @@ function steer(t, desired, speed) {
   }
 }
 
-// Where the order wants this tank to be right now.
+// Where the order wants this tank to be right now. Allies take the order from
+// their squad (game/squads.js), which also plans `ai.dest`; enemies use their own.
+// passive = don't stop to fight unless hit or a foe gets close (Move order);
+// chase = close in on targets beyond gun range.
 function orderGoal(t, game) {
-  const ai = t.ai;
-  if (ai.order === 'follow' && game.player.alive) {
-    const p = game.player, c = Math.cos(p.a), s = Math.sin(p.a);
-    const sl = ai.slot || { dx: -60, dy: 0 };
-    return { x: p.x + sl.dx * c - sl.dy * s, y: p.y + sl.dx * s + sl.dy * c, leash: 200, anchor: p };
+  const ai = t.ai, p = game.player;
+  const order = t.squad ? t.squad.order : ai.order;
+  if (ai.retreat) {
+    const at = p.alive ? { x: p.x - Math.cos(p.a) * 70, y: p.y - Math.sin(p.a) * 70 } : ai.post;
+    return { x: at.x, y: at.y, leash: 120, anchor: p.alive ? p : ai.post, passive: true };
   }
-  if (ai.order === 'attack' && ai.goal) return { x: ai.goal.x, y: ai.goal.y, leash: 1e9, anchor: null };
-  return { x: ai.post.x, y: ai.post.y, leash: LEASH, anchor: ai.post };
+  if (order === 'follow' && p.alive) {
+    const c = Math.cos(p.a), s = Math.sin(p.a);
+    const sl = ai.slot || { dx: -60, dy: 0 };
+    return { x: p.x + sl.dx * c - sl.dy * s, y: p.y + sl.dx * s + sl.dy * c, leash: 200, anchor: p, chase: true, follow: true };
+  }
+  const dest = t.squad ? ai.dest : ai.goal;
+  if (order === 'move' && dest) return { x: dest.x, y: dest.y, leash: 1e9, anchor: null, passive: true };
+  if (order === 'attack' && dest) return { x: dest.x, y: dest.y, leash: 1e9, anchor: null, chase: true };
+  const post = (t.squad && ai.dest) || ai.post;
+  return { x: post.x, y: post.y, leash: LEASH, anchor: post };
 }
 
 // Part-aware behaviour:
@@ -170,17 +187,17 @@ export function updateAI(t, game) {
   let desired = null, speed = 1;
 
   if (tg && t.parts.cannon.hp <= 0) desired = navDir(game, t, tg.x, tg.y, toT); // ram
-  else if (tg && ai.los && fromAnchor < goal.leash) {
+  else if (tg && ai.los && fromAnchor < goal.leash && (!goal.passive || dist < MOVE_ENGAGE || t.hurtT > 0)) {
     if (dist < range * 0.6) desired = toT + Math.PI + ai.strafe * 0.5;
-    else if (dist > range * 1.2 && ai.order !== 'hold') desired = navDir(game, t, tg.x, tg.y, toT);
+    else if (dist > range * 1.2 && goal.chase) desired = navDir(game, t, tg.x, tg.y, toT);
     else {
       if (--ai.strafeT <= 0) { ai.strafe = -ai.strafe; ai.strafeT = 80 + rnd() * 140; }
       desired = toT + (ai.strafe * Math.PI) / 2;
       speed = 0.6;
     }
-  } else if (toGoal > (ai.order === 'follow' ? 30 : 24)) {
+  } else if (toGoal > (goal.follow ? 30 : 24)) {
     desired = navDir(game, t, goal.x, goal.y, Math.atan2(goal.y - t.y, goal.x - t.x));
-    if (ai.order === 'follow') speed = clamp(toGoal / 80, 0.4, 1);
+    if (goal.follow) speed = clamp(toGoal / 80, 0.4, 1);
   }
 
   if (desired === null) { // idle: face the likely threat

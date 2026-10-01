@@ -4,7 +4,7 @@ A top-down, black-and-white comic-book tank roguelike where every pixel is simul
 
 See [GAME_DESIGN.md](GAME_DESIGN.md) for the full design and the roadmap (section 13).
 
-**Status:** milestone B1 done (Field battlefield, allies, flag capture). Next: B2, the tactical map with squad orders.
+**Status:** milestone B2 done (tactical map, squads, orders, stances, fog of war). Next: B3, enemy defenses, reinforcement waves and pacing.
 
 ## Run
 
@@ -30,10 +30,26 @@ Then open http://localhost:8080.
 | C | Engine power mode |
 | 1-3 | Pick a reward card |
 | R | New run (after defeat or victory) |
+| Tab / M | Tactical map (pauses the battle) |
+| O | Show / hide squad order arrows |
 | P / Esc | Pause |
 | F3 | Performance overlay |
 
-**Goal:** reach the flag on the east side and hold its zone until it's captured. Your allies follow you, and the yellow arrow on the screen edge points to the flag.
+On the tactical map:
+
+| Input | Action |
+|---|---|
+| 1-4 / click | Select a squad |
+| Right click | Move there (only stops to fight when hit or a foe is close) |
+| Shift + right click | Attack there (engages everything on the way) |
+| Ctrl + right click | Hold there (takes cover facing the nearest known enemy) |
+| H / F | Hold here / Follow me |
+| S | Stance: aggressive, or cautious (falls back to you below 40% hull) |
+| Tab / M / Esc | Back to the battle |
+
+**Goal:** reach the flag on the east side and hold its zone until it's captured. Your allies start in two squads following you, and the yellow arrow on the screen edge points to the flag.
+
+The view fills the browser window: pixels are scaled by a whole number, and the visible area grows or shrinks to fit (up to 896x544 cells).
 
 ## Color code
 
