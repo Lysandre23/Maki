@@ -1,5 +1,5 @@
 import { VIEW_W, VIEW_H } from '../config.js';
-import { g, BLACK, WHITE, RED, ICE_LIGHT, ICE_MID } from './palette.js';
+import { g, BLACK, WHITE, RED, ALLY, PLAYER, YELLOW, ORANGE } from './palette.js';
 import { hash } from '../util/rng.js';
 
 const TREAD = g(0x5a);
@@ -8,7 +8,9 @@ const CHAR = g(0x38);
 
 // Rasterizes a tank straight into the frame buffer (pixel-art rotation by
 // inverse mapping). Every part is drawn from the same geometry used for hit
-// tests, and reflects its damage state.
+// tests, and reflects its damage state. A colored stroke outside the ink
+// outline tells the team at a glance: red enemy, blue ally, bright blue +
+// yellow pennant for the player.
 export function drawTank(frame, camX, camY, t, tick) {
   const c = Math.cos(t.a), s = Math.sin(t.a);
   const tc = Math.cos(t.ta), ts = Math.sin(t.ta);
@@ -28,7 +30,9 @@ export function drawTank(frame, camX, camY, t, tick) {
   const hurtTurret = t.frac('turret') < 0.5, hurtCannon = t.frac('cannon') < 0.5;
   const hurtL = t.frac('trackL') < 0.5, hurtR = t.frac('trackR') < 0.5;
   const hurtEngine = t.frac('engine') < 0.5;
-  const frost = t.frost;
+  const stroke = t.isPlayer ? PLAYER : t.team ? RED : ALLY;
+  const sw = t.isPlayer ? 2 : 1.2; // stroke width in cells
+  const hitCol = t.team ? RED : ORANGE; // flashing hit zone: red is for enemies
   const tr2 = turretR * turretR, tri2 = (turretR - 1.2) * (turretR - 1.2);
   const hatchR = turretR * 0.26;
 
@@ -92,6 +96,11 @@ export function drawTank(frame, camX, camY, t, tick) {
 
       const k = py * VIEW_W + px;
       if (col === -1) {
+        // team stroke hugging the silhouette (hull, turret, barrel)
+        const inHull = Math.abs(u) <= hl + sw && Math.abs(v) <= hw + sw;
+        const inTurret = d2 <= (turretR + sw) * (turretR + sw);
+        const inBarrel = tu > 0 && tu <= turretR + BL + sw && Math.abs(tv) <= 1.6 + sw;
+        if (inHull || inTurret || inBarrel) { frame[k] = stroke; continue; }
         // drop shadow, light from the top-left
         const sx = dx - 2.5, sy = dy - 2.5;
         const su = sx * c + sy * s, sv = -sx * s + sy * c;
@@ -99,12 +108,25 @@ export function drawTank(frame, camX, camY, t, tick) {
         continue;
       }
       if (flashAll && !outline) col = WHITE;
-      else if (fz && zone === fz && !outline) col = RED;
-      else if (frost > 0.15 && !outline) { // frozen tank: ice crust, thicker the colder
-        const pat = (px + py) & 3;
-        if (pat === 0 || (frost > 0.6 && pat === 2)) col = ((px ^ py) & 4) ? ICE_LIGHT : ICE_MID;
-      }
+      else if (fz && zone === fz && !outline) col = hitCol;
       frame[k] = col;
+    }
+  }
+
+  if (t.isPlayer) drawPennant(frame, camX, camY, t, tick);
+}
+
+// Small yellow pennant on a whip antenna at the rear-left of the hull.
+function drawPennant(frame, camX, camY, t, tick) {
+  const c = Math.cos(t.a), s = Math.sin(t.a);
+  const u = -t.hl + 4, v = -t.hw + 4;
+  const bx = Math.round(t.x + u * c - v * s - camX), by = Math.round(t.y + u * s + v * c - camY);
+  const put = (x, y, col) => { if (x >= 0 && y >= 0 && x < VIEW_W && y < VIEW_H) frame[y * VIEW_W + x] = col; };
+  for (let k = 0; k < 9; k++) put(bx, by - k, BLACK);
+  for (let yy = 0; yy < 4; yy++) {
+    for (let xx = 1; xx <= 6 - yy; xx++) {
+      const wave = Math.round(Math.sin(xx * 0.8 - tick * 0.25) * 0.8);
+      put(bx + xx, by - 9 + yy + wave, xx === 6 - yy || yy === 3 ? BLACK : YELLOW);
     }
   }
 }

@@ -1,8 +1,8 @@
-import { VIEW_W, VIEW_H, ROOM_W, ROOM_H, ROOMS, MAX_DEBRIS, ACTIVE_MARGIN, GAS_SCALE } from '../config.js';
+import { VIEW_W, VIEW_H, ROOM_W, ROOM_H, BATTLES, MAX_DEBRIS, ACTIVE_MARGIN, GAS_SCALE, GAS_WIN_W, GAS_WIN_H } from '../config.js';
 import { clamp } from '../util/math.js';
-import { rnd, makeRng, hash } from '../util/rng.js';
+import { rnd, makeRng } from '../util/rng.js';
 import { Grid } from '../world/grid.js';
-import { generateRoom } from '../world/worldgen.js';
+import { generateBattle } from '../world/worldgen.js';
 import { M, FLAMMABLE } from '../world/materials.js';
 import { Debris } from '../world/debris.js';
 import { explode } from '../world/explosion.js';
@@ -13,8 +13,6 @@ import { Tank, PARTS } from '../entities/tank.js';
 import { Projectiles } from '../entities/projectiles.js';
 import { initAI, updateAI } from '../entities/ai.js';
 import { findCollapses } from '../world/collapse.js';
-import { Oil } from '../world/oil.js';
-import { Frost } from '../world/frost.js';
 import { pickRewards, defaultMods } from './rewards.js';
 
 const BREAK_TEXT = { trackL: 'SNAP!', trackR: 'SNAP!', cannon: 'CRUNCH!', turret: 'JAMMED!', engine: 'FWOOSH!' };
@@ -31,11 +29,19 @@ export const POWER = [
   { name: 'GUNNERY', move: 0.6, turret: 1.45, reload: 1.4 },
 ];
 
-const EMERGENCY_PER_ROOM = 2;
-const SMOKE_PER_ROOM = 3;
+const EMERGENCY_PER_BATTLE = 2;
+const SMOKE_PER_BATTLE = 3;
 const MG_OVERHEAT = 60;
-const RUSH_TICKS = 180;      // LOADER RUSH: reload x2 for 3 s after a kill
-const ABANDON_TICKS = 120;   // crew bails out, then the tank blows
+const RUSH_TICKS = 180;       // LOADER RUSH: reload x2 for 3 s after a kill
+const ABANDON_TICKS = 120;    // crew bails out, then the tank blows
+const CAPTURE_TICKS = 8 * 60; // flag capture time with the player alone
+const START_ROSTER = ['gunner', 'gunner', 'scout', 'scout'];
+
+// Formation slots around the player's tank, in its frame (x forward).
+const FORMATION = [
+  { dx: -50, dy: -52 }, { dx: -50, dy: 52 }, { dx: -100, dy: -24 }, { dx: -100, dy: 24 },
+  { dx: -150, dy: -60 }, { dx: -150, dy: 60 }, { dx: -190, dy: 0 }, { dx: -230, dy: -40 }, { dx: -230, dy: 40 },
+];
 
 // Whole game state, DOM-free (also runs headless in tools/).
 // states: play -> cleared -> reward -> play ... | dead | win
@@ -44,10 +50,8 @@ export class Game {
     this.rng = makeRng(seed >>> 0);
     this.grid = new Grid(ROOM_W, ROOM_H);
     this.debris = new Debris(MAX_DEBRIS);
-    this.gas = new Gas(ROOM_W, ROOM_H, GAS_SCALE);
+    this.gas = new Gas(ROOM_W, ROOM_H, GAS_SCALE, GAS_WIN_W, GAS_WIN_H);
     this.flames = new Fire();
-    this.oil = new Oil();
-    this.frost = new Frost();
     this.nav = new Nav(this.grid, 12);
     this.projectiles = new Projectiles();
     this.flashes = [];
@@ -62,7 +66,6 @@ export class Game {
     this.hooks = {
       onBarrel: (id) => this.triggerBarrel(id),
       ignite: (x, y) => this.flames.ignite(this.grid, x, y),
-      oil: (x, y, a) => this.oil.add(this.grid, x, y, a),
     };
     this.newRun();
   }
@@ -74,22 +77,20 @@ export class Game {
     this.tagCount = {};  // tag -> number of owned cards carrying it
     this.player = new Tank('player', 0, 0, 0, 0);
     this.player.mods = defaultMods();
+    this.roster = START_ROSTER.map((type) => ({ type, hp: null })); // allies carried between battles
     this.spares = 40;          // consumed by the crew when repairing
     this.crew = [null, null];  // part each mechanic is working on
     this.crewNext = 0;
     this.powerMode = 0;
     this.player.power = POWER[0];
-    this.startRoom();
+    this.startBattle();
   }
 
-  startRoom() {
-    const layout = generateRoom(this.grid, this.rng, this.level);
+  startBattle() {
+    const layout = generateBattle(this.grid, this.rng, this.level);
     this.debris.clear();
     this.gas.clear();
     this.flames.clear(this.grid);
-    this.oil.clear();
-    this.frost.clear(this.grid);
-    for (const pd of layout.puddles) this.oil.splash(this.grid, pd.x, pd.y, pd.r, 2);
     this.projectiles.list.length = 0;
     this.flashes.length = 0;
     this.pending.length = 0;
@@ -98,43 +99,61 @@ export class Game {
     this.scrap.length = 0;
     this.smokeClouds.length = 0;
     this.barrels = layout.barrels;
-    this.layoutName = layout.layout;
-    this.emergency = EMERGENCY_PER_ROOM + this.player.mods.extraEmergency;
-    this.smokeCharges = SMOKE_PER_ROOM + this.player.mods.extraSmoke;
+    this.biome = layout.biome;
+    const m = this.player.mods;
+    this.emergency = EMERGENCY_PER_BATTLE + m.extraEmergency;
+    this.smokeCharges = SMOKE_PER_BATTLE + m.extraSmoke;
     this.smokeCd = 0;
     this.pickupAcc = 0;
+    this.rushT = 0;
+    this.flag = { x: layout.flag.x, y: layout.flag.y, r: 64, progress: 0, contested: false };
 
     const p = this.player;
     p.x = layout.spawn.x; p.y = layout.spawn.y;
     p.a = 0; p.ta = 0; p.vx = p.vy = p.av = 0;
     p.burning = 0; p.reload = 20; p.events.length = 0;
-    p.mgHeat = 0; p.overheat = false; p.frost = 0; this.rushT = 0;
+    p.mgHeat = 0; p.overheat = false;
 
+    // allies from the roster, in formation behind the player
+    this.allies = this.roster.map((r, i) => {
+      const sl = FORMATION[i] || { dx: -240 - (i - FORMATION.length) * 40, dy: (i % 2 ? 1 : -1) * 30 };
+      const t = new Tank(r.type, p.x + sl.dx * 0.6 + 60, clamp(p.y + sl.dy, 40, ROOM_H - 40), 0, 0);
+      if (r.hp) for (const k of PARTS) t.parts[k].hp = r.hp[k];
+      t.s.reload *= m.allyReload;
+      t.dmgTaken = m.allyArmor;
+      t.rosterRef = r;
+      initAI(t, i, 'follow');
+      t.ai.slot = sl;
+      t.ai.wake = 20;
+      return t;
+    });
     this.enemies = layout.enemies.map((e, i) => {
       const t = new Tank(e.type, e.x, e.y, e.a, 1);
       t.ta = e.a;
-      initAI(t, i);
+      initAI(t, i, 'hold');
       return t;
     });
-    this.tanks = [p, ...this.enemies];
+    this.friendlies = [p, ...this.allies];
+    this.tanks = [...this.friendlies, ...this.enemies];
 
+    this.gas.follow(p.x, p.y);
     this.gas.syncSolid(this.grid);
     this.gasVersion = this.grid.version;
     this.gas.windX = (this.rng() - 0.5) * 0.004;
     this.gas.windY = (this.rng() - 0.5) * 0.004;
     this.nav.rebuild(this.grid);
-    this.nav.flow(p.x, p.y);
 
     this.state = 'play';
     this.stateT = 0;
     this.choices = null;
     this.cam.x = clamp(p.x - VIEW_W / 2, 0, ROOM_W - VIEW_W);
     this.cam.y = clamp(p.y - VIEW_H / 2, 0, ROOM_H - VIEW_H);
-    this.popup(this.level >= ROOMS ? 'BOSS ROOM!' : `ROOM ${this.level}`, p.x + 70, p.y - 34, 18, true, true);
+    this.popup(this.level >= BATTLES ? 'FINAL ASSAULT!' : `BATTLE ${this.level}`, p.x + 80, p.y - 40, 18, true, true);
+    this.popup('TAKE THE FLAG!', p.x + 80, p.y - 18, 12, true);
   }
 
-  popup(text, x, y, size = 14, red = false, burst = false) {
-    this.popups.push({ text, x, y, size, red, burst, t: 0, life: 70, rot: (rnd() - 0.5) * 0.3 });
+  popup(text, x, y, size = 14, accent = false, burst = false) {
+    this.popups.push({ text, x, y, size, accent, burst, t: 0, life: 70, rot: (rnd() - 0.5) * 0.3 });
   }
 
   // ---------------------------------------------------------------- actions
@@ -149,10 +168,9 @@ export class Game {
     const tip = t.turretR + t.barrelLen;
     const x = bx + c * tip, y = by + s * tip;
     this.projectiles.spawn({
-      x, y, vx: c * sh.speed, vy: s * sh.speed, owner: t, team: t.team,
+      x, y, vx: c * sh.speed, vy: s * sh.speed, owner: t, team: t.team, fromPlayer: t.isPlayer,
       dmg: sh.dmg, r: sh.r, power: sh.power, life: 150, ignore: null,
-      incendiary: !!t.mods.incendiary, cryo: !!t.mods.cryo, oilShell: !!t.mods.oilShell,
-      oilTrail: !!t.mods.oilTrail, bounces: t.mods.bounces || 0, cluster: !!t.mods.cluster,
+      bounces: t.mods.bounces || 0, cluster: !!t.mods.cluster,
     });
     t.reload = t.reloadMax = t.s.reload * (2 - cf); // damaged cannon = slower reload
     const kick = 0.3 * (500 / t.mass); // recoil
@@ -169,7 +187,7 @@ export class Game {
     return true;
   }
 
-  // Coaxial machine gun: fast, weak, chews bricks, strips tracks, lights crates.
+  // Coaxial machine gun: fast, weak, chews bricks and hedges, strips tracks.
   fireMG(t) {
     if (t.mgCd > 0 || t.overheat || t.parts.turret.hp <= 0) return;
     const ang = t.ta + (rnd() - 0.5) * 0.07;
@@ -177,26 +195,22 @@ export class Game {
     const bx = t.x + t.turretOff * Math.cos(t.a), by = t.y + t.turretOff * Math.sin(t.a);
     const px = -Math.sin(t.ta) * 3, py = Math.cos(t.ta) * 3; // offset beside the main gun
     const x = bx + px + c * (t.turretR + 3), y = by + py + s * (t.turretR + 3);
-    this.projectiles.spawn({ kind: 'mg', x, y, vx: c * 10, vy: s * 10, owner: t, team: t.team, dmg: 3, life: 45 });
+    this.projectiles.spawn({ kind: 'mg', x, y, vx: c * 10, vy: s * 10, owner: t, team: t.team, fromPlayer: t.isPlayer, dmg: 3, life: 45 });
     t.mgCd = 5;
     t.mgHeat += 2.4 * (t.mods.mgCool || 1);
     if (t.mgHeat >= MG_OVERHEAT) { t.overheat = true; if (t === this.player) this.popup('OVERHEAT!', t.x, t.y - t.hw - 10, 10, true); }
     this.debris.spawn(x, y, c * 2 + (rnd() - 0.5), s * 2 + (rnd() - 0.5), M.SPARK, 4 + ((rnd() * 5) | 0));
   }
 
-  // Bullet hitting masonry: chips a few cells, can bring down weakened walls.
-  chip(x, y, p) {
+  // Bullet hitting something solid: chips a few cells, can bring down weakened walls.
+  chip(x, y) {
     explode(this.grid, this.debris, x, y, 2.2, 3.5, this.hooks);
     this.gas.addSmoke(x, y, 0.05);
     const g = this.grid, cx = Math.floor(x), cy = Math.floor(y);
-    const mods = (p && p.owner && p.owner.mods) || {};
-    const igniteChance = mods.mgFire ? 0.4 : 0.03;
     for (let k = 0; k < 4; k++) {
       const nx = cx + ((rnd() * 3) | 0) - 1, ny = cy + ((rnd() * 3) | 0) - 1;
-      if (g.inBounds(nx, ny) && FLAMMABLE[g.mat[ny * g.w + nx]] && rnd() < igniteChance) this.flames.ignite(g, nx, ny);
+      if (g.inBounds(nx, ny) && FLAMMABLE[g.mat[ny * g.w + nx]] && rnd() < 0.03) this.flames.ignite(g, nx, ny);
     }
-    if (mods.mgFire) this.gas.addHeat(x, y, 0.3);
-    if (mods.mgIce) this.freezeAt(x, y, 4, 0.5);
     for (const cells of findCollapses(g, x, y, 26)) this.collapse(cells, x, y);
   }
 
@@ -205,9 +219,6 @@ export class Game {
     const dirx = p.vx / sp, diry = p.vy / sp;
     const dmg = p.dmg * (zone === 'trackL' || zone === 'trackR' ? 1.8 : 1);
     const res = t.takeHit(zone, dmg, dirx, diry, p.x, p.y, true);
-    const mods = (p.owner && p.owner.mods) || {};
-    if (mods.mgIce) t.frost = Math.min(1.5, t.frost + 0.06 * mods.frostPower);
-    if (mods.mgFire) { this.gas.addHeat(p.x, p.y, 0.4); if (rnd() < 0.05) t.burning = Math.max(t.burning, 60); }
     for (let k = 0; k < 3; k++) {
       const a = Math.atan2(-diry, -dirx) + (rnd() - 0.5) * 2, v = 1 + rnd() * 2;
       this.debris.spawn(p.x, p.y, Math.cos(a) * v, Math.sin(a) * v, M.SPARK, 5 + ((rnd() * 8) | 0));
@@ -293,6 +304,7 @@ export class Game {
       const x = i % g.w, y = (i / g.w) | 0, m = g.mat[i];
       g.mat[i] = M.EMPTY; g.hp[i] = 0; g.data[i] = 0;
       g.markDirty(x, y);
+      g.navTouch(x, y);
       if (rnd() < 0.55) {
         const s = 0.8 + rnd() * 1.8;
         this.debris.spawn(x + 0.5, y + 0.5, dx * s + (rnd() - 0.5) * 0.8, dy * s + (rnd() - 0.5) * 0.8, m);
@@ -323,6 +335,7 @@ export class Game {
   }
 
   // Explosion: carves terrain, pushes gas, shoves and damages tanks.
+  // Hot blasts sometimes light the dry grass and hedges around them.
   blast(x, y, r, power, opts = {}) {
     explode(this.grid, this.debris, x, y, r, power, this.hooks);
     for (const cells of findCollapses(this.grid, x, y, r * 2.5 + 24)) this.collapse(cells, x, y);
@@ -330,23 +343,21 @@ export class Game {
     this.flashes.push({ x, y, r, t: 0, spin: rnd() * 6.28 });
     this.shake = Math.min(14, this.shake + r * 0.2);
 
-    // explosions light oil they touch (always with NAPALM)
-    {
-      const g = this.grid, R = r * 1.2, chance = this.player.mods.napalm ? 1 : 0.5;
+    const g = this.grid;
+    if (opts.incendiary) {
+      const R = r * 1.4;
       for (let yy = Math.max(0, Math.floor(y - R)); yy <= Math.min(g.h - 1, y + R); yy++) {
         for (let xx = Math.max(0, Math.floor(x - R)); xx <= Math.min(g.w - 1, x + R); xx++) {
-          if (g.mat[yy * g.w + xx] === M.OIL && (xx - x) ** 2 + (yy - y) ** 2 <= R * R && rnd() < chance) this.flames.ignite(g, xx, yy);
+          if ((xx - x) ** 2 + (yy - y) ** 2 <= R * R && FLAMMABLE[g.mat[yy * g.w + xx]] && rnd() < 0.6) this.flames.ignite(g, xx, yy);
         }
+      }
+    } else if (rnd() < 0.25) { // one blast in four starts a small fire in the dry grass
+      for (let k = 0; k < 3; k++) {
+        const a = rnd() * 6.28, d = r * (0.6 + rnd() * 0.6);
+        this.flames.ignite(g, Math.floor(x + Math.cos(a) * d), Math.floor(y + Math.sin(a) * d));
       }
     }
     if (opts.incendiary) {
-      const R = r * 1.4, g = this.grid;
-      for (let yy = Math.floor(y - R); yy <= y + R; yy++) {
-        for (let xx = Math.floor(x - R); xx <= x + R; xx++) {
-          if (!g.inBounds(xx, yy) || (xx - x) ** 2 + (yy - y) ** 2 > R * R) continue;
-          if (FLAMMABLE[g.mat[yy * g.w + xx]] && rnd() < 0.6) this.flames.ignite(g, xx, yy);
-        }
-      }
       for (let k = 0; k < 14; k++) {
         const a = rnd() * 6.28, v = 0.8 + rnd() * 2.5;
         this.debris.spawn(x, y, Math.cos(a) * v, Math.sin(a) * v, M.EMBER, 40 + ((rnd() * 60) | 0));
@@ -377,21 +388,8 @@ export class Game {
   onTankHit(t, zone, p) {
     const sp = Math.hypot(p.vx, p.vy) || 1;
     const dirx = p.vx / sp, diry = p.vy / sp;
-    let dmg = p.dmg;
-    const pm = this.player.mods;
-    if (p.team === 0 && t.team) {
-      if (pm.shatter && t.frost > 0.2) { dmg *= 2; this.popup('SHATTER!', p.x, p.y - 12, 12, false); }
-      if (pm.thermal && ((p.incendiary && t.frost > 0.2) || (p.cryo && t.burning > 0))) {
-        dmg *= 3;
-        t.frost = 0;
-        const cracks = ['trackL', 'trackR', 'turret', 'cannon', 'engine'];
-        t.damagePart(cracks[(rnd() * cracks.length) | 0], 30);
-        this.popup('THERMAL SHOCK!', p.x, p.y - 16, 15, true, true);
-        this.gas.addSteam(p.x, p.y, 2);
-      }
-    }
-    const res = t.takeHit(zone, dmg, dirx, diry, p.x, p.y);
-    if (res.pen) this.popup('PENETRATION!', p.x, p.y - 14, 13, t === this.player, !res.ricochet && t !== this.player);
+    const res = t.takeHit(zone, p.dmg, dirx, diry, p.x, p.y);
+    if (res.pen) this.popup('PENETRATION!', p.x, p.y - 14, 13, !t.team, !res.ricochet && !!t.team);
     const push = p.dmg * 0.008 * (500 / t.mass) * (res.ricochet ? 0.3 : 1);
     t.vx += dirx * push; t.vy += diry * push;
     if (res.ricochet) {
@@ -403,12 +401,23 @@ export class Game {
       if (t === this.player) this.shake = Math.min(14, this.shake + 2);
       return res;
     }
-    this.blast(p.x, p.y, p.r * 0.45, p.power * 0.5, { noSplash: true, incendiary: p.incendiary });
+    this.blast(p.x, p.y, p.r * 0.45, p.power * 0.5, { noSplash: true });
     this.impact(p, p.x, p.y);
-    if (p.incendiary && pm.afterburn && t.team) t.burning = Math.max(t.burning, 150);
     if (zone === 'engine') this.gas.addSteam(p.x, p.y, 1.2);
     if (t === this.player) this.shake = Math.min(14, this.shake + 5);
     return res;
+  }
+
+  // Extra effects where a shell lands (wall or tank).
+  impact(p, x, y) {
+    if (!p.cluster) return;
+    for (let k = 0; k < 3; k++) {
+      const a = rnd() * 6.28, v = 2 + rnd() * 1.5;
+      this.projectiles.spawn({
+        kind: 'shell', x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, owner: null, team: p.team, fromPlayer: p.fromPlayer,
+        dmg: p.dmg * 0.3, r: p.r * 0.55, power: p.power * 0.55, life: 6 + ((rnd() * 8) | 0), cluster: false, bounces: 0,
+      });
+    }
   }
 
   triggerBarrel(id) {
@@ -432,22 +441,13 @@ export class Game {
     this.blast(t.x, t.y, big ? 24 + t.hw * 0.4 : 16 + t.hw * 0.3, big ? 20 : 14);
     this.stampWreck(t);
     this.wrecks.push({ x: t.x, y: t.y, t: 900, max: 900 });
-    const pm = this.player.mods;
-    if (t.team && pm.scorched) { // SCORCHED EARTH
-      this.spillOil(t.x, t.y, 20);
-      for (let k = 0; k < 12; k++) this.flames.ignite(this.grid, Math.floor(t.x + (rnd() - 0.5) * 20), Math.floor(t.y + (rnd() - 0.5) * 20));
+    // spare parts thrown out of the wreck (yours too: salvage your fallen)
+    const n = (t.team ? 4 : 2) + Math.floor(t.hw / 3);
+    for (let k = 0; k < n; k++) {
+      const a = rnd() * 6.28, v = 1.5 + rnd() * 2.5;
+      this.scrap.push({ x: t.x, y: t.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, t: 1800 });
     }
-    if (t.team && pm.absoluteZero && t.frost > 0.2) { // ABSOLUTE ZERO: freezing nova, can chain
-      this.freezeAt(t.x, t.y, 70, 1.6);
-      this.popup('ABSOLUTE ZERO!', t.x, t.y - t.hw - 22, 16, false, true);
-    }
-    if (t.team) { // spare parts thrown out of the wreck
-      const n = 4 + Math.floor(t.hw / 3);
-      for (let k = 0; k < n; k++) {
-        const a = rnd() * 6.28, v = 1.5 + rnd() * 2.5;
-        this.scrap.push({ x: t.x, y: t.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, t: 1800 });
-      }
-    }
+    if (!t.team && !t.isPlayer) this.popup('ALLY LOST!', t.x, t.y - t.hw - 24, 14, true);
     this.popup(big ? 'KA-BOOM!' : 'BLAM!', t.x, t.y - t.hw - 8, big ? 22 : 18, false, true);
     this.shake = Math.min(14, this.shake + (big ? 10 : 6));
     if (t.team && this.player.alive) { // LOADER RUSH: momentum after a kill
@@ -470,7 +470,7 @@ export class Game {
         if (Math.abs(u) > t.hl - 1 || Math.abs(v) > t.hw - 1) continue;
         if (rnd() > 0.88) continue; // ragged, holed wreck
         const i = y * g.w + x;
-        if (g.mat[i] !== M.EMPTY && g.mat[i] !== M.RUBBLE) continue;
+        if (g.mat[i] !== M.EMPTY && g.mat[i] !== M.RUBBLE && g.mat[i] !== M.GRASS) continue;
         if (others.some((o) => (o.x - x) ** 2 + (o.y - y) ** 2 < (o.hw + 2) ** 2)) continue;
         const du = u - t.turretOff;
         const d = du * du + v * v < t.turretR * t.turretR ? 3 : Math.abs(v) > t.hw - t.trackW ? 2 : 1;
@@ -479,19 +479,38 @@ export class Game {
     }
   }
 
+  // Survivors go back into the roster (damage carried over).
+  saveRoster() {
+    this.roster = this.allies.filter((t) => t.alive).map((t) => {
+      const hp = {};
+      for (const k of PARTS) hp[k] = t.parts[k].hp;
+      return { type: t.type, hp };
+    });
+  }
+
   chooseReward(i) {
     if (this.state !== 'reward' || !this.choices || !this.choices[i]) return;
     const r = this.choices[i];
     r.apply(this.player, this);
     this.build.push(r.id);
     for (const tag of r.tags) this.tagCount[tag] = (this.tagCount[tag] || 0) + 1;
-    // patch-up between rooms: +20%, and wrecked parts come back at 30%
-    for (const k of PARTS) {
-      const p = this.player.parts[k];
-      p.hp = p.hp <= 0 ? p.max * 0.3 : Math.min(p.max, p.hp + p.max * 0.2);
+    // patch-up between battles: +20%, and wrecked parts come back at 30%
+    const patch = (parts, full) => {
+      for (const k of PARTS) {
+        const p = parts[k], max = p.max;
+        p.hp = full ? max : p.hp <= 0 ? max * 0.3 : Math.min(max, p.hp + max * 0.2);
+      }
+    };
+    patch(this.player.parts, false);
+    for (const r2 of this.roster) {
+      if (!r2.hp) continue;
+      const tmp = new Tank(r2.type, 0, 0, 0, 0);
+      for (const k of PARTS) tmp.parts[k].hp = r2.hp[k];
+      patch(tmp.parts, this.player.mods.fieldWorkshop);
+      for (const k of PARTS) r2.hp[k] = tmp.parts[k].hp;
     }
     this.level++;
-    this.startRoom();
+    this.startBattle();
   }
 
   // ---------------------------------------------------------------- update
@@ -511,10 +530,10 @@ export class Game {
     } else { p.throttle = 0; p.turn = 0; }
     if (this.smokeCd > 0) this.smokeCd--;
 
-    for (const e of this.enemies) {
-      if (!e.alive) continue;
-      if (playing) updateAI(e, this);
-      else { e.throttle = 0; e.turn = 0; }
+    for (const t of this.tanks) {
+      if (!t.alive || t.isPlayer) continue;
+      if (playing) updateAI(t, this);
+      else { t.throttle = 0; t.turn = 0; }
     }
 
     for (const t of this.tanks) t.update(this.grid, this.debris);
@@ -528,9 +547,13 @@ export class Game {
 
     this.emitters();
     this.updateScrap();
-    this.updateElements();
+    if (this.rushT > 0) this.rushT--;
+    p.reloadBoost = this.rushT > 0 ? 2 : 1;
     this.flames.step(this.grid, this.gas, this.hooks.onBarrel);
-    if (this.grid.version !== this.gasVersion && this.tick % 4 === 0) {
+
+    // gas window follows the camera; re-sync obstacles when it moves or walls change
+    const moved = this.gas.follow(this.cam.x + VIEW_W / 2, this.cam.y + VIEW_H / 2);
+    if (moved || (this.grid.version !== this.gasVersion && this.tick % 4 === 0)) {
       this.gas.syncSolid(this.grid);
       this.gasVersion = this.grid.version;
     }
@@ -540,8 +563,7 @@ export class Game {
     for (const t of this.tanks) {
       if (!t.alive || t.burning > 0) continue;
       const h = this.gas.heatAt(t.x, t.y);
-      const fd = t === p ? p.mods.fireDmg : 1; // FIREPROOF HULL
-      if (h > 0.5 && fd > 0) { t.damagePart('hull', (h - 0.5) * 0.4 * fd); t.damagePart('engine', (h - 0.5) * 0.3 * fd); }
+      if (h > 0.5) { t.damagePart('hull', (h - 0.5) * 0.4); t.damagePart('engine', (h - 0.5) * 0.3); }
     }
 
     const cam = this.cam;
@@ -549,8 +571,12 @@ export class Game {
       cam.x - ACTIVE_MARGIN, cam.y - ACTIVE_MARGIN,
       cam.x + VIEW_W + ACTIVE_MARGIN, cam.y + VIEW_H + ACTIVE_MARGIN, this.hooks);
 
-    if (this.tick % 30 === 0 && this.nav.version !== this.grid.version) this.nav.rebuild(this.grid);
-    if (this.tick % 20 === 0 && p.alive) this.nav.flow(p.x, p.y);
+    // pathfinding catches up with destroyed hedges / walls / new wrecks
+    const nb = this.grid.navBox;
+    if (nb && this.tick % 15 === 0) {
+      this.nav.rebuildRegion(this.grid, nb[0] - 24, nb[1] - 24, nb[2] + 24, nb[3] + 24);
+      this.grid.navBox = null;
+    }
 
     for (const t of this.tanks) {
       for (const e of t.events) {
@@ -567,104 +593,41 @@ export class Game {
     for (let i = this.popups.length - 1; i >= 0; i--) if (++this.popups[i].t >= this.popups[i].life) this.popups.splice(i, 1);
     this.shake *= 0.85;
 
+    if (this.state === 'play') this.updateFlag();
     this.updateState();
     this.updateCamera(inp);
   }
 
-  // smoke/fire/steam sources attached to entities
-  // ------------------------------------------------------------ elements
-
-  // Shell payloads applied where a shell lands (wall or tank).
-  impact(p, x, y) {
-    if (p.cryo) this.freezeAt(x, y, p.r * 1.6, 1);
-    if (p.oilShell) this.spillOil(x, y, p.r * 0.9);
-    if (p.cluster) {
-      for (let k = 0; k < 3; k++) {
-        const a = rnd() * 6.28, v = 2 + rnd() * 1.5;
-        this.projectiles.spawn({
-          kind: 'shell', x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, owner: null, team: p.team,
-          dmg: p.dmg * 0.3, r: p.r * 0.55, power: p.power * 0.55, life: 6 + ((rnd() * 8) | 0),
-          incendiary: p.incendiary, cryo: p.cryo, oilShell: p.oilShell, cluster: false, bounces: 0,
-        });
-      }
-    }
-  }
-
-  freezeAt(x, y, r, strength) {
-    const m = this.player.mods;
-    this.frost.freeze(this.grid, this.gas, this.flames, x, y, r, strength * m.frostPower, m.frostTime);
+  // Capture fills while friendlies (and no enemies) are in the zone; more
+  // friendlies capture faster. Contested = frozen; empty = slow decay.
+  updateFlag() {
+    const f = this.flag;
+    let friends = 0, foes = 0;
     for (const t of this.tanks) {
-      if (!t.alive) continue;
-      const d = Math.hypot(t.x - x, t.y - y), reach = r + t.hw;
-      if (d < reach) t.frost = Math.min(1.5, t.frost + 0.8 * strength * m.frostPower * (1 - d / reach));
+      if (!t.alive || Math.hypot(t.x - f.x, t.y - f.y) > f.r + t.hw * 0.5) continue;
+      if (t.team) foes++; else friends++;
     }
-    const n = Math.min(24, Math.round(r));
-    for (let k = 0; k < n; k++) {
-      const a = rnd() * 6.28, v = 0.8 + rnd() * 2.5;
-      this.debris.spawn(x, y, Math.cos(a) * v, Math.sin(a) * v, M.ICEBIT, 10 + ((rnd() * 20) | 0));
-    }
-  }
-
-  // Oil pool plus droplets flung outward that land as more oil.
-  spillOil(x, y, r) {
-    const k = this.player.mods.oilAmount;
-    this.oil.splash(this.grid, x, y, r * 0.6 * Math.sqrt(k), 6); // deep pool: it will run
-    const n = Math.round(20 * k);
-    for (let i = 0; i < n; i++) {
-      const a = rnd() * 6.28, v = 0.6 + rnd() * 2.2;
-      this.debris.spawn(x, y, Math.cos(a) * v, Math.sin(a) * v, M.OILDROP);
+    f.contested = friends > 0 && foes > 0;
+    const rate = (1 / CAPTURE_TICKS) * this.player.mods.quickCapture;
+    if (friends && !foes) f.progress = Math.min(1, f.progress + rate * (1 + 0.3 * (friends - 1)));
+    else if (!friends) f.progress = Math.max(0, f.progress - rate * 0.25);
+    if (f.progress >= 1) {
+      this.state = 'cleared'; this.stateT = 0;
+      this.saveRoster();
+      this.popup('FLAG CAPTURED!', f.x, f.y - 50, 24, true, true);
     }
   }
 
-  // Element simulation + build effects that depend on the room state.
-  updateElements() {
-    const p = this.player, m = p.mods, g = this.grid;
-    this.flames.lifeMult = m.fireLife;
-    this.flames.spreadMult = m.fireSpread;
-    this.flames.oilHeat = m.napalm ? 2 : 1;
-    g.brittle = m.brittle;
-    this.oil.step(g);
-    if (this.tick % 4 === 0) this.frost.step(g, this.gas);
-
-    for (const t of this.tanks) {
-      if (!t.alive || t.frost <= 0) continue;
-      t.frost = Math.max(0, t.frost - (t === p ? 0.004 : 0.004 / m.frostTime));
-      if (this.gas.heatAt(t.x, t.y) > 0.3) t.frost = Math.max(0, t.frost - 0.05); // heat thaws
-    }
-
-    // PHOENIX HULL: damage taken shrinks with the burning area
-    p.dmgTaken = m.phoenix ? Math.max(0.3, 1 - this.flames.list.length / 2000) : 1;
-    // INFERNO LOADER / COLD BLOOD: reload speed
-    let rb = 1;
-    if (m.inferno) {
-      const L = this.flames.list;
-      let near = 0;
-      for (let i = 0; i < L.length; i += 4) {
-        const dx = (L[i] % g.w) - p.x, dy = ((L[i] / g.w) | 0) - p.y;
-        if (dx * dx + dy * dy < 80 * 80) near += 4;
-      }
-      rb += Math.min(1, near / 150);
-    }
-    if (m.coldBlood && this.enemies.some((e) => e.alive && e.frost > 0.2)) rb *= 2;
-    if (this.rushT > 0) { this.rushT--; rb *= 2; }
-    p.reloadBoost = rb;
-    // LEAKY TANK
-    if (m.leaky && p.alive && Math.hypot(p.vx, p.vy) > 0.3 && this.tick % 3 === 0) {
-      const bx = p.x - Math.cos(p.a) * (p.hl + 2), by = p.y - Math.sin(p.a) * (p.hl + 2);
-      this.oil.add(g, Math.floor(bx), Math.floor(by), Math.round(2 * m.oilAmount));
-    }
-  }
-
-  // Mission kill: an enemy with no gun and no way to move is abandoned by its
-  // crew and scuttled a couple of seconds later.
+  // Mission kill: a tank with no gun and no way to move is abandoned by its
+  // crew and scuttled a couple of seconds later (yours too, except you).
   missionKills() {
-    for (const t of this.enemies) {
-      if (!t.alive) continue;
+    for (const t of this.tanks) {
+      if (!t.alive || t.isPlayer) continue;
       const pt = t.parts;
       const stuck = pt.engine.hp <= 0 || (pt.trackL.hp <= 0 && pt.trackR.hp <= 0);
       if (!t.abandonT && pt.cannon.hp <= 0 && stuck) {
         t.abandonT = ABANDON_TICKS;
-        this.popup('ABANDONED!', t.x, t.y - t.hw - 12, 14, false, true);
+        this.popup('ABANDONED!', t.x, t.y - t.hw - 12, 14, !t.team, true);
         this.gas.addSmoke(t.x, t.y, 1.5);
       }
       if (t.abandonT && --t.abandonT <= 0) t.parts.hull.hp = 0;
@@ -679,14 +642,12 @@ export class Game {
     for (const k of this.crew) {
       if (!k) continue;
       const pp = p.parts[k];
-      const slick = p.mods.slick && p.onOil > 0.15; // SLICK OPERATOR
-      if (pp.hp >= pp.max || (this.spares <= 0 && !slick)) continue;
-      const rate = pp.max * 0.0008 * (still ? 2 : 1) * (k === 'hull' ? 0.35 : 1) * (pp.hp <= 0 ? 0.5 : 1) *
-        p.mods.crewRate * (slick ? 3 : 1);
+      if (pp.hp >= pp.max || this.spares <= 0) continue;
+      const rate = pp.max * 0.0008 * (still ? 2 : 1) * (k === 'hull' ? 0.35 : 1) * (pp.hp <= 0 ? 0.5 : 1) * p.mods.crewRate;
       const add = Math.min(rate, pp.max - pp.hp);
       const was = pp.hp;
       pp.hp += add;
-      if (!slick) this.spares = Math.max(0, this.spares - add / (k === 'hull' ? 4 : 8));
+      this.spares = Math.max(0, this.spares - add / (k === 'hull' ? 4 : 8));
       if (was <= 0 && pp.hp > 0) this.popup(`${PART_LABEL[k]} FIXED!`, p.x, p.y - p.hw - 10, 11, true);
     }
     if (this.crew.includes('engine') && p.burning > 0) p.burning = Math.max(0, p.burning - 3); // put the fire out
@@ -718,6 +679,7 @@ export class Game {
     }
   }
 
+  // smoke/fire/steam sources attached to entities
   emitters() {
     for (let i = this.smokeClouds.length - 1; i >= 0; i--) {
       const c = this.smokeClouds[i];
@@ -770,7 +732,7 @@ export class Game {
               const j2 = -rv * 1.2;
               a.vx -= nx * j2 * wa; a.vy -= ny * j2 * wa;
               b.vx += nx * j2 * wb; b.vy += ny * j2 * wb;
-              if (-rv > 0.6) { // ramming damage
+              if (-rv > 0.6 && a.team !== b.team) { // ramming damage (friends just bump)
                 const dmg = -rv * 12;
                 a.damagePart('hull', dmg * wa); b.damagePart('hull', dmg * wb);
               }
@@ -785,14 +747,10 @@ export class Game {
     const p = this.player;
     if (this.state === 'play') {
       if (!p.alive) { this.state = 'dead'; this.stateT = 0; }
-      else if (this.enemies.every((e) => !e.alive)) {
-        this.state = 'cleared'; this.stateT = 0;
-        this.popup('ROOM CLEARED!', p.x, p.y - 30, 22, true, true);
-      }
     } else if (this.state === 'cleared') {
       if (!p.alive) { this.state = 'dead'; this.stateT = 0; }
-      else if (++this.stateT > 120) {
-        if (this.level >= ROOMS) this.state = 'win';
+      else if (++this.stateT > 150) {
+        if (this.level >= BATTLES) this.state = 'win';
         else { this.state = 'reward'; this.choices = pickRewards(this.rng, this.build, this.tagCount, this.level); }
       }
     } else this.stateT++;

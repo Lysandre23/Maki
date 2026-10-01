@@ -1,32 +1,42 @@
 import { SOLID } from './materials.js';
 
 const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+const CACHE = 24;
 
-// Coarse navigation grid + BFS flow field toward the player.
-// Rebuilt when terrain changes (walls get destroyed, wrecks appear).
+// Coarse navigation grid + BFS flow fields.
+// Many tanks share a few destinations (follow the player, hold a post, take
+// the flag), so fields are cached per destination node (LRU) and dropped when
+// the terrain changes (rebuildRegion).
 export class Nav {
-  constructor(grid, cell = 8) {
+  constructor(grid, cell = 12) {
     this.c = cell;
     this.w = Math.ceil(grid.w / cell);
     this.h = Math.ceil(grid.h / cell);
     const n = this.w * this.h;
     this.blocked = new Uint8Array(n);
     this.pass = new Uint8Array(n);
-    this.dist = new Int32Array(n).fill(-1);
     this.queue = new Int32Array(n);
-    this.version = -1;
+    this.cache = new Map(); // node -> { dist, t }
+    this.version = 0;
   }
 
   rebuild(grid) {
+    this.rebuildRegion(grid, 0, 0, grid.w - 1, grid.h - 1);
+  }
+
+  // Recompute blocked/pass for the nodes covering a world rect.
+  rebuildRegion(grid, x0, y0, x1, y1) {
     const { c, w, h, blocked, pass } = this;
     const gw = grid.w, mat = grid.mat;
-    for (let nj = 0; nj < h; nj++) {
-      for (let ni = 0; ni < w; ni++) {
+    const ni0 = Math.max(0, Math.floor(x0 / c) - 1), ni1 = Math.min(w - 1, Math.floor(x1 / c) + 1);
+    const nj0 = Math.max(0, Math.floor(y0 / c) - 1), nj1 = Math.min(h - 1, Math.floor(y1 / c) + 1);
+    for (let nj = nj0; nj <= nj1; nj++) {
+      for (let ni = ni0; ni <= ni1; ni++) {
         let b = 0;
-        const x0 = ni * c, y0 = nj * c;
-        for (let y = y0; y < y0 + c && y < grid.h && !b; y++) {
+        const bx = ni * c, by = nj * c;
+        for (let y = by; y < by + c && y < grid.h && !b; y++) {
           const row = y * gw;
-          for (let x = x0; x < x0 + c && x < gw; x++) {
+          for (let x = bx; x < bx + c && x < gw; x++) {
             if (SOLID[mat[row + x]]) { b = 1; break; }
           }
         }
@@ -34,8 +44,8 @@ export class Nav {
       }
     }
     // A tank needs clearance: node plus its 8 neighbours must be free.
-    for (let nj = 0; nj < h; nj++) {
-      for (let ni = 0; ni < w; ni++) {
+    for (let nj = Math.max(0, nj0 - 1); nj <= Math.min(h - 1, nj1 + 1); nj++) {
+      for (let ni = Math.max(0, ni0 - 1); ni <= Math.min(w - 1, ni1 + 1); ni++) {
         let ok = 1;
         for (let dj = -1; dj <= 1 && ok; dj++) {
           for (let di = -1; di <= 1; di++) {
@@ -46,16 +56,25 @@ export class Nav {
         pass[nj * w + ni] = ok;
       }
     }
-    this.version = grid.version;
+    this.cache.clear();
+    this.version++;
   }
 
-  flow(x, y) {
-    const { c, w, h, pass, dist, queue } = this;
+  node(x, y) {
+    const i = Math.max(0, Math.min(this.w - 1, Math.floor(x / this.c)));
+    const j = Math.max(0, Math.min(this.h - 1, Math.floor(y / this.c)));
+    return j * this.w + i;
+  }
+
+  // BFS distance field toward (x, y), cached. Returns Int32Array (-1 = unreachable).
+  field(x, y) {
+    const s = this.node(x, y);
+    const hit = this.cache.get(s);
+    if (hit) { this.cache.delete(s); this.cache.set(s, hit); return hit.dist; } // LRU touch
+    const { w, h, pass, queue } = this;
+    const dist = new Int32Array(w * h);
     dist.fill(-1);
-    const si = Math.max(0, Math.min(w - 1, Math.floor(x / c)));
-    const sj = Math.max(0, Math.min(h - 1, Math.floor(y / c)));
     let head = 0, tail = 0;
-    const s = sj * w + si;
     dist[s] = 0; queue[tail++] = s;
     while (head < tail) {
       const k = queue[head++];
@@ -70,11 +89,14 @@ export class Nav {
         queue[tail++] = nk;
       }
     }
+    if (this.cache.size >= CACHE) this.cache.delete(this.cache.keys().next().value);
+    this.cache.set(s, { dist });
+    return dist;
   }
 
-  // Direction (radians) to walk from (x, y) toward the flow target, or null.
-  dirAt(x, y) {
-    const { c, w, h, dist } = this;
+  // Direction (radians) to walk from (x, y) down a distance field, or null.
+  dirAt(dist, x, y) {
+    const { c, w, h } = this;
     const i = Math.floor(x / c), j = Math.floor(y / c);
     if (i < 0 || j < 0 || i >= w || j >= h) return null;
     const own = dist[j * w + i];

@@ -18,16 +18,17 @@ export function explode(grid, debris, x, y, r, power, hooks) {
       if (d2 > r2) continue;
       const i = yy * w + xx;
       const m = mat[i];
-      if (m === M.EMPTY || m === M.OIL) continue; // liquid: ignited by the caller, not blown away
+      if (m === M.EMPTY) continue;
 
       const d = Math.sqrt(d2);
       const f = 1 - d / r;
-      const dmg = power * f * (0.75 + rnd() * 0.5) * (grid.frost[i] ? grid.brittle : 1);
+      const dmg = power * f * (0.75 + rnd() * 0.5);
 
       if (dmg >= hp[i]) {
         if (m === M.BARREL && hooks) hooks.onBarrel(data[i]);
         mat[i] = M.EMPTY; hp[i] = 0; data[i] = 0;
         grid.markDirty(xx, yy);
+        grid.navTouch(xx, yy);
         destroyed++;
         let ux, uy;
         if (d < 0.5) { const a = rnd() * 6.2832; ux = Math.cos(a); uy = Math.sin(a); }
@@ -36,9 +37,6 @@ export function explode(grid, debris, x, y, r, power, hooks) {
         if (rnd() < DEBRIS_CHANCE[m]) {
           debris.spawn(xx + 0.5, yy + 0.5,
             ux * speed + (rnd() - 0.5) * 0.4, uy * speed + (rnd() - 0.5) * 0.4, m);
-        }
-        if (grid.frost[i] && rnd() < 0.3) { // frozen masonry shatters into ice shards
-          debris.spawn(xx + 0.5, yy + 0.5, ux * speed * 1.6, uy * speed * 1.6, M.ICEBIT, 20 + ((rnd() * 25) | 0));
         }
         if (m === M.WOOD && rnd() < 0.3) {
           debris.spawn(xx + 0.5, yy + 0.5, ux * speed * 1.3, uy * speed * 1.3, M.EMBER, 40 + ((rnd() * 50) | 0));

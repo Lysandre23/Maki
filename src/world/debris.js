@@ -9,8 +9,7 @@ const NEIGHBORS = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [
 // Free-flying particles in flat typed arrays.
 // Top-down view: no gravity. Debris gets an outward blast impulse, slides with
 // damping, bounces off solids, then settles back into the grid as RUBBLE.
-// SPARK / ICEBIT: short-lived, ignore walls. EMBER: bounces, ignites wood and oil, burns out.
-// OILDROP: flies like debris, lands as an oil cell.
+// SPARK: short-lived, ignores walls. EMBER: bounces, ignites what it touches (grass underneath too), burns out.
 export class Debris {
   constructor(max) {
     this.max = max;
@@ -45,7 +44,6 @@ export class Debris {
 
   settle(grid, i, hooks) {
     const cx = Math.floor(this.x[i]), cy = Math.floor(this.y[i]);
-    if (this.m[i] === M.OILDROP) { if (hooks) hooks.oil(cx, cy, 1); return; }
     for (const [ox, oy] of NEIGHBORS) {
       const x = cx + ox, y = cy + oy;
       if (grid.inBounds(x, y) && grid.mat[y * grid.w + x] === M.EMPTY) {
@@ -64,7 +62,7 @@ export class Debris {
       const mi = m[i];
       const outside = px < ax0 || px > ax1 || py < ay0 || py > ay1;
 
-      if (mi === M.SPARK || mi === M.ICEBIT) {
+      if (mi === M.SPARK) {
         if (--life[i] <= 0 || outside) { this.remove(i); continue; }
         vx[i] *= SPARK_DAMP; vy[i] *= SPARK_DAMP;
         x[i] = px + vx[i]; y[i] = py + vy[i];
@@ -93,9 +91,9 @@ export class Debris {
       x[i] = nx; y[i] = ny;
 
       if (mi === M.EMBER) {
-        // embers light up oil they fly over
+        // embers light up the grass they fly over
         const ex = Math.floor(nx), ey = Math.floor(ny);
-        if (hooks && grid.inBounds(ex, ey) && grid.mat[ey * grid.w + ex] === M.OIL && (i & 3) === 0) hooks.ignite(ex, ey);
+        if (hooks && grid.inBounds(ex, ey) && grid.mat[ey * grid.w + ex] === M.GRASS && (i & 3) === 0) hooks.ignite(ex, ey);
         if (--life[i] <= 0) this.remove(i);
         continue;
       }

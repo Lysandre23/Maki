@@ -40,7 +40,7 @@ The world stays **black and white** (comic ink, halftone, cross-hatching, baked 
 ---
 
 ## 4. The battle
-- **Map:** large and horizontal, about 4 screens of area (target 2560x864 cells, camera 640x360). You spawn on the left edge, and the enemy flag is near the right edge.
+- **Map:** large and horizontal, about 4 screens of area (2560x896 cells, camera 640x360). You spawn on the left edge, and the enemy flag is near the right edge.
 - **Objective: capture the flag.**
   - A capture zone (radius ~60 cells) around the flag.
   - Capture fills while friendly tanks are inside and no enemy is. It takes ~8 s with the player alone and is faster with allies (+30% each).
@@ -145,7 +145,7 @@ Fire stays **natural physics** and is rendered **orange**: explosions and burnin
 ---
 
 ## 12. Tech notes
-- **World:** grid ~2560x864 (2.2 M cells, ~20 MB of typed arrays), 64x64 chunks, camera 640x360.
+- **World:** grid ~2560x896 (2.2 M cells, ~20 MB of typed arrays), 64x64 chunks, camera 640x360.
 - **Gas solver:** limited to a window around the camera (e.g. 1.5 screens), frozen or dissipated outside it, so its cost stays at today's ~3 ms.
 - **AI:** team-agnostic tank brain (target selection by team), with an **order layer** (move/attack/hold/follow + stance) on top and a **commander layer** for the enemy. Line-of-sight checks are staggered over ticks.
 - **Navigation:** flow fields per order destination, cached and shared by squads with the same target.
@@ -153,15 +153,135 @@ Fire stays **natural physics** and is rendered **orange**: explosions and burnin
 
 ---
 
-## 13. Milestones
-| # | Goal | Done when |
+## 13. Milestones and roadmap
+
+| # | Goal | Status |
 |---|---|---|
-| **B1** | Remove the elements. New color rule (yellow HUD, orange fire, red/blue strokes). Wide map + **Field** biome (grass, hedges, hay). Team-agnostic AI with **allies**. **Flag capture**. | A battle can be won by capturing the flag with 4 allies at your side |
-| B2 | **Tactical map**: pause, schematic view, squads, orders (Move/Attack/Hold/Follow), stances, fog of war | Orders visibly change how the battle unfolds |
-| B3 | **Enemy**: defenses, reinforcement waves, commander AI; 5-minute pacing and balance | Battles last ~5 min and feel like a front line |
-| B4 | **Cards v2** (player / team families, new-tank cards), roster persistence, 7-battle run | A full run is playable |
-| B5 | **Biomes**: Forest, Beach, Village | Each battle picks a biome |
-| B6 | Polish: sound, readability, balance | |
+| **B1** | Elements removed, new color rule, wide Field battlefield, allies, flag capture | **Done** (2026-10-01) |
+| B2 | Tactical map: pause, schematic view, squads, orders, stances, fog of war | Next |
+| B3 | Enemy defenses, reinforcement waves, commander AI, 5-minute pacing | |
+| B4 | Cards v2, 7-battle run, roster persistence | |
+| B5 | Biomes: Forest, Beach, Village | |
+| B6 | Polish: sound, readability, balance, stutters | |
+
+### 13.1 B1: what was built (state on 2026-10-01)
+- **Removed:** oil, ice/frost, all elemental cards, element colors. Fire stays as natural physics (orange).
+- **Colors** (`src/render/palette.js`):
+  - **HUD:** yellow `#ffd21e`;
+  - **outlines:** enemy red, ally blue, player bright blue plus a yellow pennant;
+  - **fire:** orange `#ff8a1c`;
+  - **shells:** player black, ally blue, enemy red.
+- **Map:** 2560x896 cells (`ROOM_W`/`ROOM_H` in `src/config.js`), 64x64 chunks, camera 640x360.
+- **Gas solver:** windowed, 1024x640 world cells (`GAS_WIN_W`/`GAS_WIN_H`). It follows the camera (`Gas.follow`), and outside the window fires burn without producing smoke.
+- **Field biome** (`generateBattle` in `src/world/worldgen.js`):
+  - dirt road west to east, plowed fields, soil patches, pebbles;
+  - tall **GRASS** meadows: walkable, crushed flat by tanks, flammable, 40% damp (won't catch);
+  - **HEDGE** hedgerows (north-south lines with gaps, plus east-west stubs), copses and lone trees;
+  - **HAY** bales, 1-2 brick farmhouses, crates, fuel drums, old craters;
+  - daylight with halftone cloud shadows.
+- **Materials:** GRASS=9, HEDGE=10, HAY=11 (`src/world/materials.js`). Fire life, spread and heat are set per material in `src/world/fire.js`.
+- **Navigation** (`src/world/nav.js`):
+  - 12-cell nodes with 3x3 clearance;
+  - BFS flow fields per destination, cached LRU (24 entries);
+  - `rebuildRegion` refreshes only the area touched by destruction, tracked through `grid.navBox`.
+- **AI** (`src/entities/ai.js`): team-agnostic.
+  - Targets the nearest visible hostile (line of sight staggered, every 12 ticks per tank).
+  - Avoids friendly fire.
+  - Orders: **follow** (formation slot behind the player), **hold** (post + leash 240), **attack** (goal point).
+  - Shots are telegraphed (charge, laser, glint).
+- **Teams** (`src/game/game.js`):
+  - `friendlies` = player + allies (team 0), `enemies` (team 1);
+  - allies spawn from `roster` in `FORMATION` slots;
+  - start roster: 2 gunners + 2 scouts;
+  - dead allies are lost (`saveRoster` on victory), and damage carries over with a +20% patch (or full with Field Workshop).
+- **Player tank:** hull 300 (gunner 110). It keeps parts, crew (1-7), emergency patch (E), power modes (C), machine gun (RMB), smoke (Space), angle armor, ricochets, penetration, mission kills and loader rush.
+- **Flag** (`Game.updateFlag`):
+  - zone radius 64;
+  - capture 8 s alone, +30% per extra friendly;
+  - frozen while contested, decays at 25% speed when empty;
+  - shown as a dashed ring with a blue progress arc;
+  - victory sets state `cleared`, then the reward screen.
+- **HUD:** yellow top bar (battle, allies, enemies, kills, flag %), off-screen arrows (yellow to the flag with distance, blue to allies).
+- **Cards** (`src/game/rewards.js`): 17 for your tank (yellow band) and 7 team cards (blue band), including new scout, gunner and heavy.
+- **Measured (bot, headless):** ~2.4 ms simulation per tick, ~0.6 ms per frame. Battle generation takes ~0.5-0.8 s, the first frame up to ~35 ms. The bot wins in ~50 s, which is too fast; B3 fixes the pacing.
+
+### 13.2 B2: Tactical map (next)
+**Goal:** pause, read the whole battlefield, give squads orders, resume.
+
+1. **Squads**
+   - New `Squad` objects: `{ id, tanks[], order, goal, stance, path[] }`. Allies start in 2 squads of 2 (roster order). Each roster entry stores its squad id so it persists between battles.
+   - The AI reads its order from its squad instead of `t.ai.order`. Formation slots are computed per squad around the squad goal (or around the player for Follow).
+2. **Orders** (extend `orderGoal` in `ai.js`):
+   - **Move:** go to point by flow field, fight only when fired upon or a target is within 200.
+   - **Attack:** go to point, engage everything seen on the way (current attack behaviour).
+   - **Hold:** take position around the point, prefer cells with a solid between them and the nearest known enemy (cover search on the nav grid), leash 240.
+   - **Follow:** current behaviour.
+   - **Stance:** Aggressive (never retreat) / Cautious (below 40% hull, fall back toward the player and stop until the order is renewed or the hull is repaired by a Support ally later).
+3. **Fog of war** (new `src/game/vision.js`):
+   - Per-team visibility grid on 16-cell nodes, refreshed every 10 ticks.
+   - Each friendly reveals a radius (~360) with a line-of-sight check per node, coarse and staggered.
+   - `game.known` = enemies visible now plus last-seen ghosts (position and time, fading after 20 s).
+4. **Tactical map UI** (new `src/render/tacmap.js`, drawn on the fx canvas or a dedicated overlay canvas):
+   - Tab / M toggles it and **pauses the simulation** (the game loop skips `game.update`).
+   - **Schematic terrain:** an offscreen bitmap built once per battle from the grid (flat tones for ground, grass, hedge, wood/hay, masonry, road, water later). Patched when `grid.navBox` changes, and burning areas overlaid in orange.
+   - **Icons:** player (yellow), squads (blue, with a number, health bar and order glyph), known enemies (red, ghosts faded), flag with capture ring.
+   - **Interaction:**
+     - click a squad, or keys 1-4, to select it;
+     - right-click a point to Move, Shift + right-click to Attack;
+     - H to Hold at the squad's position or the clicked point, F to Follow, S to toggle stance.
+     - Paths are drawn as blue arrows by sampling the flow field.
+     - Number keys are already used for the crew in-game; on the map they select squads.
+   - Optionally, the current orders are drawn faintly in-game as blue arrows (toggle with O).
+5. **HUD:** a small squad panel (squad number, tanks alive, order) under the top bar.
+6. **Done when:** sending a squad around a hedgerow to flank visibly changes the fight; Hold squads defend a point; Cautious squads retreat.
+
+### 13.3 B3: Enemy and pacing
+1. **Defenses** (worldgen):
+   - sandbag walls (new **SAND** material: solid, low HP, absorbs blasts);
+   - dug-in tank positions (U-shaped sandbags) at chokepoints and around the flag;
+   - 1-3 static **anti-tank guns** (new tank type: no tracks, long range, fragile, small).
+2. **Reinforcement waves:**
+   - Enemy squads (2-4 tanks) enter from the east edge every ~60 s.
+   - Wave size grows with the battle number and with time spent.
+   - Waves stop once the flag is captured.
+3. **Enemy commander AI** (new `src/game/commander.js`, runs every ~3 s):
+   - Splits the map into 3 lanes (north, middle, south) and scores each by known friendly vs enemy strength and distance to the flag.
+   - Assigns squads: reinforce the lane with the strongest friendly push, hold the flag with at least one squad, and send a counter-attack when it is clearly stronger in a lane.
+4. **Pacing / balance:**
+   - Engagement ranges up (SIGHT 460 to ~560), speeds -15%, reloads +20%.
+   - Tune with the headless bot until a battle lasts ~5 minutes and the player is under real pressure.
+5. **Done when:** battles last ~5 minutes and feel like pushing a front line, not clearing static targets.
+
+### 13.4 B4: Full run and cards v2
+1. **Run:** 7 battles (6 + final assault with the boss tank and stronger defenses). Rewards after each won battle; defeat when the player's tank dies.
+2. **Card catalogue:**
+   - ~40 cards: ~20 for your tank, ~20 for the team.
+   - Rarities common / rare / epic / legendary, with the rare frames, synergy badges and build strip already built.
+   - **Team cards:**
+     - new tank cards: scout, gunner, heavy, **anti-tank** (long range, fragile), **support** (slowly repairs nearby allies);
+     - extra squad slot, bigger squads (max 4), veteran crews, applique armor, field workshop;
+     - combined arms (you and allies near each other reload faster), rally (Follow squads get armor), spotters (wider vision for fog of war), flag runners;
+     - **artillery support** (legendary: a barrage callable from the tactical map).
+   - **Tags:** escort, assault, defense, recon, gun, armor, crew. Draws favour owned tags (already implemented).
+3. **Roster screen** between battles: list of tanks and squads with damage, so you can see what survived.
+4. **Done when:** a full 7-battle run is playable and builds feel different from run to run.
+
+### 13.5 B5: Biomes
+- **Forest:** dense trees as **TRUNK** (solid wood) + **CANOPY** (overhead layer: hides units under it from the tactical map and enemy sight, flammable, rendered as foliage over tanks), trails, clearings. Forest fires as a major event.
+- **Beach:** **SAND** floor (craters deepen easily, slows tanks a little), **WATER** (slows tanks strongly, fire makes steam, later electricity), dunes, concrete bunkers (new **CONCRETE** masonry), anti-tank obstacles.
+- **Village:** the old room generator (halls/lanes/courtyard, 3/4 wall depth, indoor lighting, in git history before the B1 commit) adapted into a village of houses along streets.
+- Each battle picks a biome. The final assault uses the Village or a fortified variant.
+
+### 13.6 B6: Polish
+- **Sound:** WebAudio synthesized shots, explosions, engines, fire crackle, UI clicks.
+- **Readability:** team outlines at distance, minimap corner (optional), damage numbers off by default.
+- **Performance:** spread chunk rendering over several frames on camera jumps and at battle start; precompute the worldgen noise on a coarse grid (generation currently ~0.5-0.8 s).
+- **Balance:** card values, ally strength, wave sizes, capture time.
+
+### 13.7 Testing approach
+- `node tools/bench.mjs [ticks]` runs a headless battle with a bot (drives to the flag along the flow field, shoots the nearest enemy) and reports simulation and render cost.
+- `node tools/snapshot.mjs out.png [ticks] [seed]` renders a frame of a bot-played battle to PNG.
+- Mechanics are checked with headless scripts (armor/ricochet, crew, emergency, smoke vs line of sight, MG chip, wall collapse, telegraph). These scripts live outside the repo; add them under `tools/tests/` when convenient.
 
 ---
 

@@ -1,4 +1,4 @@
-import { VIEW_W, VIEW_H, TICK, ROOMS } from './config.js';
+import { VIEW_W, VIEW_H, TICK, BATTLES } from './config.js';
 import { Game, POWER } from './game/game.js';
 import { CARDS } from './game/rewards.js';
 import { PARTS } from './entities/tank.js';
@@ -41,17 +41,15 @@ const resHud = $('res');
 // click a part to send a mechanic to it (same as keys 1-7)
 for (const k of PARTS) partRows[k].addEventListener('mousedown', (e) => { e.stopPropagation(); game.assignCrew(k); });
 
-const EL_ICON = { fire: '▲', ice: '✱', oil: '●' };
-const TAG_LABEL = { fire: 'FIRE', ice: 'ICE', oil: 'OIL', gun: 'CANNON', mg: 'MG', hull: 'HULL', move: 'MOBILITY', crew: 'CREW', utility: 'UTILITY' };
+const TAG_LABEL = { gun: 'CANNON', armor: 'ARMOR', move: 'MOBILITY', crew: 'CREW', cover: 'COVER', squad: 'SQUAD', objective: 'OBJECTIVE' };
 
 function cardHtml(r, i) {
-  const tags = r.tags.filter((t) => !t.endsWith('-src')).map((t) => `<i class="tag ${t}">${TAG_LABEL[t] || t}</i>`).join('');
-  const source = r.tags.some((t) => t.endsWith('-src')) ? '<i class="tag src">NEW ELEMENT</i>' : '';
+  const tags = r.tags.map((t) => `<i class="tag">${TAG_LABEL[t] || t}</i>`).join('');
   const syn = r.synergy.length ? `<div class="syn">SYNERGY: ${r.synergy.map((t) => TAG_LABEL[t] || t).join(' + ')}</div>` : '';
-  return `<div class="card ${r.rarity} el-${r.el || 'none'}" data-i="${i}">` +
-    `<div class="band">${r.el ? EL_ICON[r.el] + ' ' + r.el.toUpperCase() : 'TANK'}</div>` +
+  return `<div class="card ${r.rarity} fam-${r.fam}" data-i="${i}">` +
+    `<div class="band">${r.fam === 'team' ? '&#9873; TEAM' : '&#9670; YOUR TANK'}</div>` +
     `<div class="rar">${r.rarity.toUpperCase()}</div><span class="key">${i + 1}</span>` +
-    `<h2>${r.name}</h2><div class="desc">${r.desc}</div><div class="tags">${source}${tags}</div>${syn}</div>`;
+    `<h2>${r.name}</h2><div class="desc">${r.desc}</div><div class="tags">${tags}</div>${syn}</div>`;
 }
 
 function buildHtml() {
@@ -60,9 +58,10 @@ function buildHtml() {
   for (const id of game.build) counts[id] = (counts[id] || 0) + 1;
   const chips = Object.entries(counts).map(([id, n]) => {
     const c = CARDS.find((k) => k.id === id);
-    return `<span class="chip ${c.rarity} el-${c.el || 'none'}">${c.name}${n > 1 ? ' x' + n : ''}</span>`;
+    return `<span class="chip ${c.rarity} fam-${c.fam}">${c.name}${n > 1 ? ' x' + n : ''}</span>`;
   }).join('');
-  return `<div id="build"><span>YOUR BUILD</span>${chips}</div>`;
+  const team = game.roster.map((r) => r.type.toUpperCase()).join(' · ') || 'NO ALLIES LEFT';
+  return `<div id="build"><span>YOUR BUILD</span>${chips}</div><div id="build"><span>YOUR TEAM</span><span class="chip fam-team">${team}</span></div>`;
 }
 
 let shownState = null;
@@ -71,23 +70,26 @@ function syncOverlay() {
   if (key === shownState) return;
   shownState = key;
   if (game.state === 'reward') {
-    overlay.innerHTML = `<h1>ROOM ${game.level} CLEARED!</h1><p>PICK YOUR UPGRADE</p><div id="cards">${
+    overlay.innerHTML = `<h1>BATTLE ${game.level} WON!</h1><p>PICK YOUR REWARD</p><div id="cards">${
       game.choices.map((r, i) => cardHtml(r, i)).join('')
     }</div>${buildHtml()}`;
     overlay.querySelectorAll('.card').forEach((el) => el.addEventListener('click', () => game.chooseReward(+el.dataset.i)));
     overlay.style.display = 'flex';
   } else if (game.state === 'dead') {
-    overlay.innerHTML = `<h1 class="red">TANK DESTROYED</h1><p>REACHED ROOM ${game.level} / ${ROOMS} - ${game.kills} KILLS</p><p>PRESS R FOR A NEW RUN</p>`;
+    overlay.innerHTML = `<h1 class="red">TANK DESTROYED</h1><p>FELL IN BATTLE ${game.level} / ${BATTLES} - ${game.kills} KILLS</p><p>PRESS R FOR A NEW RUN</p>`;
     overlay.style.display = 'flex';
   } else if (game.state === 'win') {
-    overlay.innerHTML = `<h1>VICTORY!</h1><p>ALL ${ROOMS} ROOMS CLEARED - ${game.kills} KILLS</p><p>PRESS R FOR A NEW RUN</p>`;
+    overlay.innerHTML = `<h1>VICTORY!</h1><p>ALL ${BATTLES} BATTLES WON - ${game.kills} KILLS</p><p>PRESS R FOR A NEW RUN</p>`;
     overlay.style.display = 'flex';
   } else overlay.style.display = 'none';
 }
 
 function updateHud() {
   const alive = game.enemies.filter((e) => e.alive).length;
-  topHud.textContent = `ROOM ${game.level} / ${ROOMS}    ENEMIES : ${alive}    KILLS : ${game.kills}`;
+  const allies = game.allies.filter((e) => e.alive).length;
+  const f = game.flag;
+  const flagTxt = f.contested ? 'CONTESTED!' : `${Math.round(f.progress * 100)}%`;
+  topHud.textContent = `BATTLE ${game.level} / ${BATTLES}    ALLIES : ${allies}    ENEMIES : ${alive}    KILLS : ${game.kills}    FLAG : ${flagTxt}`;
   for (const k of PARTS) {
     const f = game.player.frac(k);
     const row = partRows[k];

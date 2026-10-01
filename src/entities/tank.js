@@ -19,7 +19,7 @@ const hp = (hull, track, turret, cannon, engine, ammo) =>
 export const TYPES = {
   player: {
     len: 40, wid: 26, speed: 1.5, turn: 0.05, turretRate: 0.09, reload: 36, armorFront: 0.5,
-    hp: hp(180, 60, 60, 50, 60, 50), shell: { speed: 8, dmg: 55, r: 12, power: 13 }, body: 0xec, top: 0xfc, range: 0,
+    hp: hp(300, 80, 80, 70, 80, 60), shell: { speed: 8, dmg: 55, r: 12, power: 13 }, body: 0xec, top: 0xfc, range: 0,
   },
   scout: {
     len: 32, wid: 20, speed: 1.6, turn: 0.065, turretRate: 0.08, reload: 60, armorFront: 0.8,
@@ -59,11 +59,10 @@ export class Tank {
     this.power = { move: 1, turret: 1, reload: 1 }; // engine power split (player modes)
     this.charge = 0; this.chargeMax = 1;             // AI shot telegraph countdown
     this.mgCd = 0; this.mgHeat = 0; this.overheat = false;
-    this.frost = 0;          // 0..1.5: frozen tanks are slow in everything
-    this.onIce = 0; this.onOil = 0; // fraction of the hull outline over ice / oil
     this.reloadBoost = 1;    // set each tick by upgrades (player)
     this.dmgTaken = 1;       // set each tick by upgrades (player)
     this.mods = {};          // player build flags, see game/rewards.js
+    this.isPlayer = type === 'player';
     this.events = [];
     this.parts = {};
     for (const k of PARTS) this.parts[k] = { hp: T.hp[k], max: T.hp[k] };
@@ -109,12 +108,11 @@ export class Tank {
     return (0.4 + 0.6 * this.frac('turret')) * (this.parts.engine.hp <= 0 ? 0.4 : 1);
   }
   canFire() { return this.alive && this.parts.cannon.hp > 0 && this.reload <= 0; }
-  chill() { return 1 - 0.6 * Math.min(1, this.frost); } // speed factor from being frozen
 
   aimAt(target) {
     if (this.parts.turret.hp <= 0) { this.ta = this.a + this.turretLock; return; }
     // while an AI is "charging" a shot the turret nearly locks: dodge window
-    const max = this.s.turretRate * this.turretFactor() * this.power.turret * this.chill() * (this.charge > 0 ? 0.25 : 1);
+    const max = this.s.turretRate * this.turretFactor() * this.power.turret * (this.charge > 0 ? 0.25 : 1);
     this.ta += clamp(angDiff(target, this.ta), -max, max);
   }
 
@@ -140,7 +138,7 @@ export class Tank {
 
   update(grid, debris) {
     if (!this.alive) return;
-    if (this.reload > 0) this.reload -= this.power.reload * this.reloadBoost * this.chill();
+    if (this.reload > 0) this.reload -= this.power.reload * this.reloadBoost;
     if (this.mgCd > 0) this.mgCd--;
     this.mgHeat = Math.max(0, this.mgHeat - 0.35);
     if (this.overheat && this.mgHeat < 10) this.overheat = false;
@@ -151,8 +149,7 @@ export class Tank {
       this.parts.hull.hp -= this.team === 0 ? 0.12 * (this.mods.fireDmg ?? 1) * this.dmgTaken : 0.45;
     }
 
-    const eng = this.engineFactor() * this.power.move * this.chill() *
-      (this.mods.noOilSlow ? 1 : 1 - 0.4 * this.onOil); // oil is sticky
+    const eng = this.engineFactor() * this.power.move;
     const L = clamp(this.throttle + this.turn, -1, 1) * this.trackFactor('trackL');
     const R = clamp(this.throttle - this.turn, -1, 1) * this.trackFactor('trackR');
     const targetF = (L + R) * 0.5 * this.s.speed * eng;
@@ -161,12 +158,10 @@ export class Tank {
     const c = Math.cos(this.a), s = Math.sin(this.a);
     let fs = this.vx * c + this.vy * s;  // forward speed
     let ls = -this.vx * s + this.vy * c; // sideways slip (tracks resist it)
-    // on ice the tracks lose grip: sideways slides, sluggish throttle and steering
-    const ice = this.mods.iceGrip ? 0 : this.onIce;
-    fs += (targetF - fs) * (0.08 - 0.06 * ice);
-    ls *= 0.75 + 0.22 * ice;
+    fs += (targetF - fs) * 0.08;
+    ls *= 0.75;
     fs *= this.drag;
-    this.av += (targetW - this.av) * (0.2 - 0.14 * ice);
+    this.av += (targetW - this.av) * 0.2;
     this.vx = fs * c - ls * s;
     this.vy = fs * s + ls * c;
     this.treadL += fs + this.av * this.hw;
@@ -213,13 +208,17 @@ export class Tank {
   plow(grid, debris) {
     const c = Math.cos(this.a), s = Math.sin(this.a);
     const speed = Math.hypot(this.vx, this.vy);
-    let n = 0, ice = 0, oil = 0;
+    let n = 0;
     for (const p of this.samples) {
       const wx = Math.floor(this.x + p.u * c - p.v * s), wy = Math.floor(this.y + p.u * s + p.v * c);
       if (!grid.inBounds(wx, wy)) continue;
       const i = wy * grid.w + wx;
-      if (grid.frost[i]) ice++;
-      if (grid.mat[i] === M.OIL) oil++;
+      if (grid.mat[i] === M.GRASS) { // tall grass is crushed flat under the tracks
+        grid.mat[i] = M.EMPTY; grid.hp[i] = 0;
+        grid.floor[i] = F.FLAT;
+        grid.touch(wx, wy);
+        continue;
+      }
       if (grid.mat[i] !== M.RUBBLE) continue;
       n++;
       if (speed > 0.15 && n <= 12) {
@@ -231,8 +230,6 @@ export class Tank {
       }
     }
     this.drag = 1 - Math.min(0.25, n * 0.02);
-    this.onIce = ice / this.samples.length;
-    this.onOil = oil / this.samples.length;
   }
 
   stampTracks(grid, fs) {

@@ -8,11 +8,17 @@ const VORT = 0.22;     // vorticity confinement strength (swirl)
 // (Stam-style stable fluids) on a coarse grid. Walls from the cell grid are
 // obstacles, so blasts push smoke around corners and through fresh holes.
 // Explosions are modelled as a divergence source (the gas expands outward).
+// The solver only covers a window (winW x winH world cells) that follows the
+// camera; ox/oy is the window origin in gas cells. Outside it, fires still
+// burn but produce no smoke, and gas scrolls away when the window moves.
 export class Gas {
-  constructor(w, h, scale) {
+  constructor(worldW, worldH, scale, winW = worldW, winH = worldH) {
     this.s = scale;
-    this.w = Math.ceil(w / scale);
-    this.h = Math.ceil(h / scale);
+    this.w = Math.ceil(Math.min(winW, worldW) / scale);
+    this.h = Math.ceil(Math.min(winH, worldH) / scale);
+    this.maxOx = Math.ceil(worldW / scale) - this.w;
+    this.maxOy = Math.ceil(worldH / scale) - this.h;
+    this.ox = 0; this.oy = 0;
     const n = this.w * this.h;
     const f = () => new Float64Array(n); // f64: avoids f32<->f64 conversions in hot loops
     this.u = f(); this.v = f(); this.u0 = f(); this.v0 = f();
@@ -30,6 +36,30 @@ export class Gas {
     this.active = 0;
   }
 
+  // Keep the window centred on (cx, cy); scroll the fields when it moves.
+  // Returns true if the window moved (caller must re-sync solids).
+  follow(cx, cy) {
+    const tx = Math.max(0, Math.min(this.maxOx, Math.round(cx / this.s - this.w / 2)));
+    const ty = Math.max(0, Math.min(this.maxOy, Math.round(cy / this.s - this.h / 2)));
+    const dx = tx - this.ox, dy = ty - this.oy;
+    if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return false;
+    const { w, h, tmp } = this;
+    for (const f of [this.u, this.v, this.p, this.expand, this.smoke, this.heat, this.steam]) {
+      tmp.fill(0);
+      for (let j = 0; j < h; j++) {
+        const sj = j + dy;
+        if (sj < 0 || sj >= h) continue;
+        for (let i = 0; i < w; i++) {
+          const si = i + dx;
+          if (si >= 0 && si < w) tmp[j * w + i] = f[sj * w + si];
+        }
+      }
+      f.set(tmp);
+    }
+    this.ox = tx; this.oy = ty;
+    return true;
+  }
+
   syncSolid(grid) {
     const { w, h, s, solid } = this;
     const half = s >> 1;
@@ -37,7 +67,7 @@ export class Gas {
       for (let i = 0; i < w; i++) {
         const k = j * w + i;
         if (i === 0 || j === 0 || i === w - 1 || j === h - 1) { solid[k] = 1; continue; }
-        const wx = Math.min(grid.w - 1, i * s + half), wy = Math.min(grid.h - 1, j * s + half);
+        const wx = Math.min(grid.w - 1, (i + this.ox) * s + half), wy = Math.min(grid.h - 1, (j + this.oy) * s + half);
         solid[k] = SOLID[grid.mat[wy * grid.w + wx]];
         if (solid[k]) { this.smoke[k] = 0; this.heat[k] = 0; this.steam[k] = 0; this.u[k] = 0; this.v[k] = 0; }
       }
@@ -53,7 +83,7 @@ export class Gas {
   }
 
   cell(x, y) {
-    const i = Math.floor(x / this.s), j = Math.floor(y / this.s);
+    const i = Math.floor(x / this.s) - this.ox, j = Math.floor(y / this.s) - this.oy;
     if (i < 0 || j < 0 || i >= this.w || j >= this.h) return -1;
     const k = j * this.w + i;
     return this.solid[k] ? -1 : k;
@@ -66,27 +96,12 @@ export class Gas {
   // velocity in world cells per tick
   addVel(x, y, vx, vy) { const k = this.cell(x, y); if (k >= 0) { this.u[k] += vx / this.s; this.v[k] += vy / this.s; this.active = 600; } }
 
-  // Cold blast: heat vanishes, hot gas condenses into a burst of steam.
-  chill(x, y, r) {
-    const { w, h, s } = this;
-    const gx = x / s, gy = y / s, gr = Math.max(1, r / s);
-    for (let j = Math.max(1, Math.floor(gy - gr)); j <= Math.min(h - 2, gy + gr); j++) {
-      for (let i = Math.max(1, Math.floor(gx - gr)); i <= Math.min(w - 2, gx + gr); i++) {
-        if ((i - gx) ** 2 + (j - gy) ** 2 > gr * gr) continue;
-        const k = j * w + i;
-        if (this.heat[k] > 0.05) this.steam[k] = Math.min(3, this.steam[k] + this.heat[k] * 1.5);
-        this.heat[k] = 0;
-      }
-    }
-    this.active = 600;
-  }
-
   smokeAt(x, y) { const k = this.cell(x, y); return k < 0 ? 0 : this.smoke[k]; }
   heatAt(x, y) { const k = this.cell(x, y); return k < 0 ? 0 : this.heat[k]; }
 
   blast(x, y, r, power, heatMul = 1) {
     const { w, h, s } = this;
-    const gx = x / s - 0.5, gy = y / s - 0.5;
+    const gx = x / s - 0.5 - this.ox, gy = y / s - 0.5 - this.oy;
     const gr = Math.max(1.5, (r * 1.3) / s);
     const j0 = Math.max(1, Math.floor(gy - gr)), j1 = Math.min(h - 2, Math.ceil(gy + gr));
     const i0 = Math.max(1, Math.floor(gx - gr)), i1 = Math.min(w - 2, Math.ceil(gx + gr));

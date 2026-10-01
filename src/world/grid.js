@@ -18,8 +18,8 @@ export class Grid {
     this.scorch = new Uint8Array(n);  // 0 none, 1 light, 2 dark
     this.burn = new Uint8Array(n);    // fire life per burning cell
     this.light = new Uint8Array(n);   // baked ceiling lighting, 0..255
-    this.frost = new Uint8Array(n);   // ice coating timer (x4 ticks), floor and walls
-    this.brittle = 2;                 // blast damage multiplier on frozen masonry
+    // bounding box of solidity changes since the nav grid last caught up
+    this.navBox = null;
     this.struct = new Uint16Array(n); // masonry structure id (wall segment, pillar)
     this.structSize = new Int32Array(1); // original cell count per structure id
     this.dirty = new Uint8Array(this.cw * this.ch).fill(1); // chunk needs full redraw
@@ -41,6 +41,12 @@ export class Grid {
     if (down) this.dirty[i + this.cw] = 1;
     if (right && down) this.dirty[i + this.cw + 1] = 1;
     if (up) this.dirty[i - this.cw] = 1;
+  }
+
+  navTouch(x, y) {
+    const b = this.navBox;
+    if (!b) this.navBox = [x, y, x, y];
+    else { if (x < b[0]) b[0] = x; if (y < b[1]) b[1] = y; if (x > b[2]) b[2] = x; if (y > b[3]) b[3] = y; }
   }
 
   // Cheap invalidation for a single cell whose change can't affect shadows.
@@ -65,7 +71,7 @@ export class Grid {
     this.mat[i] = m;
     this.hp[i] = MAT_HP[m];
     this.data[i] = data;
-    if (SOLID[old] !== SOLID[m]) { this.markDirty(x, y); this.version++; }
+    if (SOLID[old] !== SOLID[m]) { this.markDirty(x, y); this.version++; this.navTouch(x, y); }
     else this.touch(x, y);
   }
 }

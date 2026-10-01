@@ -47,8 +47,6 @@ export class Projectiles {
           if (dead) break;
         }
 
-        if (p.oilTrail && ((p.life + k) & 3) === 0) game.oil.add(grid, Math.floor(p.x), Math.floor(p.y), 1);
-
         if (grid.isSolid(Math.floor(p.x), Math.floor(p.y))) {
           if (p.kind === 'shell' && p.bounces > 0) {
             // RICOCHET ROUNDS: find which axis hit the wall and mirror it

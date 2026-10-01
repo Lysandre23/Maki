@@ -1,5 +1,5 @@
 import { VIEW_W, VIEW_H, CHUNK, CHUNK_SHIFT } from '../config.js';
-import { cellColor, g, RED, WHITE, BLACK, DEBRIS_COLOR } from './palette.js';
+import { cellColor, g, RED, WHITE, BLACK, DEBRIS_COLOR, ORANGE, FLAME_HOT, ALLY, YELLOW } from './palette.js';
 import { M } from '../world/materials.js';
 import { drawTank } from './tankdraw.js';
 import { hash } from '../util/rng.js';
@@ -9,7 +9,7 @@ const BAYER = new Float32Array([0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 1
 const SMOKE = g(0x2e), SMOKE_ON_DARK = g(0x74), SOOT = g(0x10);
 const STEAM_ON_LIGHT = g(0xa8);
 const TRAIL = g(0x78);
-const FIRE_CYCLE = [RED, WHITE, RED, g(0x18)];
+const FIRE_CYCLE = [ORANGE, FLAME_HOT, ORANGE, g(0x18)];
 
 // Builds a full frame into a Uint32 buffer (VIEW_W x VIEW_H). DOM-free.
 export class Composer {
@@ -70,6 +70,7 @@ export class Composer {
     this.drawFire(game, frame, camX, camY);
     this.drawDebris(game.debris, frame, camX, camY, game.tick);
     this.drawScrap(game, frame, camX, camY);
+    if (game.flag) this.drawFlag(game.flag, frame, camX, camY, game.tick);
     for (const t of game.tanks) if (t.alive) drawTank(frame, camX, camY, t, game.tick);
     this.drawProjectiles(game, frame, camX, camY);
     this.drawGas(game.gas, frame, camX, camY);
@@ -91,8 +92,27 @@ export class Composer {
       const px = Math.floor(d.x[i]) - camX, py = Math.floor(d.y[i]) - camY;
       if (px < 0 || py < 0 || px >= VIEW_W || py >= VIEW_H) continue;
       const m = d.m[i];
-      frame[py * VIEW_W + px] = m === M.EMBER || m === M.SPARK ? (((i + tick) & 2) ? RED : WHITE) : DEBRIS_COLOR[m];
+      frame[py * VIEW_W + px] = m === M.EMBER || m === M.SPARK ? (((i + tick) & 2) ? ORANGE : FLAME_HOT) : DEBRIS_COLOR[m];
     }
+  }
+
+  // The objective: a pole with a waving cloth, red while the enemy holds it,
+  // turning blue from the bottom up as it is captured.
+  drawFlag(f, frame, camX, camY, tick) {
+    const bx = Math.round(f.x) - camX, by = Math.round(f.y) - camY;
+    const put = (x, y, c) => { if (x >= 0 && y >= 0 && x < VIEW_W && y < VIEW_H) frame[y * VIEW_W + x] = c; };
+    for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) if (dx * dx + dy * dy <= 16) put(bx + dx, by + dy, dx * dx + dy * dy >= 9 ? BLACK : g(0x60)); // base
+    for (let y = 0; y < 34; y++) { put(bx, by - y, BLACK); put(bx + 1, by - y, g(0x50)); } // pole
+    const fill = Math.round(f.progress * 12);
+    for (let y = 0; y < 12; y++) {
+      for (let x = 0; x < 20; x++) {
+        const wave = Math.round(Math.sin(x * 0.45 - tick * 0.15) * 1.5 * (x / 20));
+        const yy = by - 33 + y + wave;
+        const edge = y === 0 || y === 11 || x === 19;
+        put(bx + 2 + x, yy, edge ? BLACK : 11 - y < fill ? ALLY : RED);
+      }
+    }
+    put(bx, by - 35, YELLOW); put(bx + 1, by - 35, YELLOW);
   }
 
   // Spare-part pickups: a little bolt, blinks before vanishing.
@@ -124,12 +144,12 @@ export class Composer {
         continue;
       }
       const sp = Math.hypot(p.vx, p.vy) || 1, dx = p.vx / sp, dy = p.vy / sp;
-      const head = p.team === 0 ? BLACK : RED;
+      const head = p.team !== 0 ? RED : p.fromPlayer ? BLACK : ALLY; // shells carry their team's colour
       if (p.kind === 'mg') { // short tracer
         for (let k = 0; k < 4; k++) {
           const px = Math.floor(p.x - dx * k) - camX, py = Math.floor(p.y - dy * k) - camY;
           if (px < 0 || py < 0 || px >= VIEW_W || py >= VIEW_H) continue;
-          frame[py * VIEW_W + px] = k === 0 ? RED : head;
+          frame[py * VIEW_W + px] = k === 0 ? ORANGE : head;
         }
         continue;
       }
@@ -148,9 +168,10 @@ export class Composer {
   // Bilinear-sampled gas, thresholded with the Bayer matrix.
   drawGas(gas, frame, camX, camY) {
     if (gas.active <= 0) return;
-    const { s, w, h, smoke, heat, steam } = gas;
-    const i0 = Math.max(0, Math.floor(camX / s) - 1), i1 = Math.min(w - 2, Math.floor((camX + VIEW_W) / s) + 1);
-    const j0 = Math.max(0, Math.floor(camY / s) - 1), j1 = Math.min(h - 2, Math.floor((camY + VIEW_H) / s) + 1);
+    const { s, w, h, smoke, heat, steam, ox, oy } = gas;
+    // i, j are window cells; world position is (i + ox, j + oy) * s
+    const i0 = Math.max(0, Math.floor(camX / s) - ox - 1), i1 = Math.min(w - 2, Math.floor((camX + VIEW_W) / s) - ox + 1);
+    const j0 = Math.max(0, Math.floor(camY / s) - oy - 1), j1 = Math.min(h - 2, Math.floor((camY + VIEW_H) / s) - oy + 1);
     for (let j = j0; j <= j1; j++) {
       for (let i = i0; i <= i1; i++) {
         const k = j * w + i, k1 = k + 1, k2 = k + w, k3 = k + w + 1;
@@ -158,7 +179,7 @@ export class Composer {
         const h0 = heat[k], h1 = heat[k1], h2 = heat[k2], h3 = heat[k3];
         const t0 = steam[k], t1 = steam[k1], t2 = steam[k2], t3 = steam[k3];
         if (s0 + s1 + s2 + s3 < 0.05 && h0 + h1 + h2 + h3 < 0.15 && t0 + t1 + t2 + t3 < 0.05) continue;
-        const wx0 = (i + 0.5) * s, wy0 = (j + 0.5) * s;
+        const wx0 = (i + ox + 0.5) * s, wy0 = (j + oy + 0.5) * s;
         for (let oy = 0; oy < s; oy++) {
           const py = wy0 + oy - camY;
           if (py < 0 || py >= VIEW_H) continue;
@@ -172,10 +193,10 @@ export class Composer {
             const th = BAYER[((py & 3) << 2) | (px & 3)];
             const idx = py * VIEW_W + px;
             if (ht > 0.2 + th * 0.7) {
-              // flame body is red; only the hottest dithered tongues go white,
-              // with black soot flecks licking through (flickers every 3 ticks)
+              // flame body is orange; only the hottest dithered tongues go
+              // pale yellow, with soot flecks licking through
               const flick = hash(px + (this.tick >> 2) * 7, py - (this.tick >> 2) * 13) & 7;
-              frame[idx] = flick === 0 ? SOOT : ht > 1.1 + th * 0.9 && flick > 3 ? WHITE : RED;
+              frame[idx] = flick === 0 ? SOOT : ht > 1.1 + th * 0.9 && flick > 3 ? FLAME_HOT : ORANGE;
               continue;
             }
             const sm = s0 * a + s1 * b + s2 * c + s3 * d;

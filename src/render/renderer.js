@@ -36,12 +36,61 @@ export class Renderer {
     f.setTransform(1, 0, 0, 1, 0, 0);
     f.clearRect(0, 0, this.fx.width, this.fx.height);
     f.setTransform(this.scale, 0, 0, this.scale, 0, 0);
+    if (game.flag) this.drawCaptureZone(f, game.flag, camX, camY, game.tick);
     for (const t of game.enemies) if (t.alive && t.charge > 0) this.drawTelegraph(f, t, game, camX, camY);
     for (const p of game.popups) this.drawPopup(f, p, camX, camY);
+    this.drawOffscreen(f, game, camX, camY);
     if (game.player.alive) {
       this.drawTargetInfo(f, game, mouse, camX, camY);
       this.drawCrosshair(f, game.player, mouse);
     }
+  }
+
+  // Dashed ring around the flag, filled arc = capture progress.
+  drawCaptureZone(f, flag, camX, camY, tick) {
+    const x = flag.x - camX, y = flag.y - camY;
+    if (x < -flag.r - 20 || y < -flag.r - 20 || x > VIEW_W + flag.r + 20 || y > VIEW_H + flag.r + 20) return;
+    f.save();
+    f.lineWidth = 0.8;
+    f.strokeStyle = flag.contested ? '#ff2d2d' : '#ffd21e';
+    f.setLineDash([4, 3]);
+    f.lineDashOffset = -tick * 0.3;
+    f.beginPath(); f.arc(x, y, flag.r, 0, Math.PI * 2); f.stroke();
+    f.setLineDash([]);
+    if (flag.progress > 0) {
+      f.lineWidth = 2.2;
+      f.strokeStyle = '#3c8cff';
+      f.beginPath(); f.arc(x, y, flag.r, -Math.PI / 2, -Math.PI / 2 + flag.progress * Math.PI * 2); f.stroke();
+    }
+    f.restore();
+  }
+
+  // Arrows on the screen edge toward the flag (yellow) and off-screen allies (blue).
+  drawOffscreen(f, game, camX, camY) {
+    const cx = VIEW_W / 2, cy = VIEW_H / 2;
+    const arrow = (wx, wy, color, size, label) => {
+      const x = wx - camX, y = wy - camY;
+      if (x >= 0 && y >= 0 && x < VIEW_W && y < VIEW_H) return;
+      const a = Math.atan2(y - cy, x - cx);
+      const k = Math.min((VIEW_W / 2 - 14) / Math.abs(Math.cos(a) || 1e-6), (VIEW_H / 2 - 14) / Math.abs(Math.sin(a) || 1e-6));
+      const ex = cx + Math.cos(a) * k, ey = cy + Math.sin(a) * k;
+      f.save();
+      f.translate(ex, ey); f.rotate(a);
+      f.beginPath(); f.moveTo(size, 0); f.lineTo(-size * 0.7, -size * 0.7); f.lineTo(-size * 0.3, 0); f.lineTo(-size * 0.7, size * 0.7); f.closePath();
+      f.fillStyle = color; f.fill();
+      f.lineWidth = 0.6; f.strokeStyle = '#000'; f.stroke();
+      f.restore();
+      if (label) {
+        f.save();
+        f.font = '7px Bangers, Impact, sans-serif'; f.textAlign = 'center'; f.textBaseline = 'middle';
+        const lx = ex - Math.cos(a) * 14, ly = ey - Math.sin(a) * 10;
+        f.lineWidth = 1.6; f.strokeStyle = '#000'; f.strokeText(label, lx, ly);
+        f.fillStyle = color; f.fillText(label, lx, ly);
+        f.restore();
+      }
+    };
+    if (game.flag) arrow(game.flag.x, game.flag.y, '#ffd21e', 6, `FLAG ${Math.round(Math.hypot(game.flag.x - game.player.x, game.flag.y - game.player.y) / 10)}m`);
+    for (const t of game.allies || []) if (t.alive) arrow(t.x, t.y, '#3c8cff', 3.5, null);
   }
 
   // "About to fire" warning: dashed laser to the first wall + muzzle glint.
@@ -156,7 +205,7 @@ export class Renderer {
     f.lineWidth = p.size * 0.2;
     f.strokeStyle = '#000';
     f.strokeText(p.text, 0, 0);
-    f.fillStyle = p.red ? '#ff2d2d' : '#fff';
+    f.fillStyle = p.accent ? '#ffd21e' : '#fff';
     f.fillText(p.text, 0, 0);
     f.restore();
   }
@@ -166,7 +215,7 @@ export class Renderer {
     f.save();
     f.translate(m.x, m.y);
     f.lineWidth = 0.7;
-    f.strokeStyle = '#ff2d2d';
+    f.strokeStyle = '#ffd21e';
     f.beginPath(); f.arc(0, 0, 5, 0, Math.PI * 2); f.stroke();
     f.beginPath();
     f.moveTo(-8, 0); f.lineTo(-3, 0); f.moveTo(3, 0); f.lineTo(8, 0);
@@ -179,7 +228,7 @@ export class Renderer {
     const heat = Math.min(1, player.mgHeat / 60); // machine gun heat, lower arc
     if (heat > 0.02) {
       f.lineWidth = 1;
-      f.strokeStyle = player.overheat ? '#ff2d2d' : '#fff';
+      f.strokeStyle = player.overheat ? '#ff8a1c' : '#fff';
       f.beginPath(); f.arc(0, 0, 10, Math.PI * 0.75, Math.PI * 0.75 - heat * Math.PI * 0.5, true); f.stroke();
     }
     f.restore();
